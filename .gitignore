@@ -1,0 +1,29 @@
+# 커널 빌드 산출물
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.symvers
+*.order
+.*.cmd
+.*.d
+.tmp_versions/
+modules.order
+Module.symvers
+
+# 디바이스 트리 컴파일 결과
+*.dtb
+*.dtbo
+
+# 커널 소스 트리 및 빌드 출력 (저장소에 포함하지 않음)
+linux/
+out/
+modules_out/
+*_build_log.txt
+
+# 커널 이미지
+Image
+zImage
+kernel*.img
+vmlinux
