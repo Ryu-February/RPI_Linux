@@ -100,3 +100,52 @@ ls /proc/device-tree/__symbols__/ | grep -x gpio
 초기에 `drivers/misc/my_driver.c` 를 `obj-y` 로 커널에 내장한 채로 동일 기능의 외부 모듈을 만들어 충돌이 발생했습니다. 외부 모듈로 일원화하면서 해결했고, 이 과정에서 내장 방식과 모듈 방식의 개발 반복 주기 차이를 체감했습니다.
 
 또한 DTS의 `compatible` 문자열에 공백이 들어간 채(`"chan, my-device"`) 작성되어 매칭 확인에 시간을 쓴 적이 있습니다. 문자열은 정확히 일치해야 합니다.
+
+---
+
+## 6. 컴파일 경고가 실제 버그를 가리키고 있던 경우
+
+**증상** — 캐릭터 디바이스 등록 코드를 추가하자 빌드 시 경고가 떴습니다. 에러가 아니라 경고라 무시하고 넘어갈 뻔했습니다.
+
+```
+warning: label 'err_cdev' defined but not used [-Wunused-label]
+```
+
+**원인** — 계단식 에러 처리에서 `class_create()` 실패 시 `goto err_class` 로 가도록 작성했습니다. 그런데 `err_class:` 는 `class_destroy(chan_class)` 를 호출합니다. **여기 도달한 이유가 `chan_class` 생성 실패인데**, 실패한 포인터를 `class_destroy()` 에 넘기면 커널이 죽습니다.
+
+그 결과 `err_cdev` 라벨로는 아무도 점프하지 않게 되었고, 컴파일러가 "쓰이지 않는 라벨"이라고 알려준 것입니다. 경고는 잔소리가 아니라 **도달 불가능한 정리 경로가 생겼다**는 신호였습니다.
+
+```c
+/* 잘못됨 — 생성 실패한 클래스를 destroy 하게 됨 */
+if (IS_ERR(chan_class)) {
+	ret = -ENODEV;
+	goto err_class;
+}
+
+/* 올바름 — 자기 단계는 건너뛰고 그 앞부터 정리 */
+if (IS_ERR(chan_class)) {
+	ret = PTR_ERR(chan_class);
+	goto err_cdev;
+}
+```
+
+반환 코드도 `-ENODEV` 로 뭉개면 실제 실패 원인(메모리 부족인지 이름 중복인지)을 잃습니다. `PTR_ERR()` 로 그대로 전달하는 것이 커널 관례입니다.
+
+> **교훈** — 계단식 정리에서 실패 지점은 **자기 단계를 건너뛰고 그 앞부터** 되감아야 한다. 그리고 커널 빌드의 경고는 흘려보내지 않는다.
+
+---
+
+## 7. `device_create()` 누락으로 `/dev` 노드가 생기지 않음
+
+**증상** — 모듈은 정상 적재되고 `probe()` 로그도 정상인데 `/dev/my_device` 가 없음.
+
+**원인** — `class_create()` 만 호출하고 `device_create()` 를 빠뜨렸습니다. 클래스는 만들었지만 실제 장치 노드를 만들지 않은 상태입니다. 두 함수의 역할이 다릅니다.
+
+| 함수 | 역할 |
+| --- | --- |
+| `class_create()` | `/sys/class/` 아래 클래스 생성. udev 에게 알릴 준비 |
+| `device_create()` | 실제 장치 등록 → udev 가 `/dev/` 노드 생성 |
+
+**해결** — 두 호출을 짝으로 유지합니다. 해제 시에도 `device_destroy()` → `class_destroy()` 순서로 짝을 맞춥니다.
+
+부수적으로 겪은 것: 모듈을 `/tmp` 에 두고 `insmod` 하다가 재부팅 후 파일이 사라져 `insmod` 가 실패했습니다. 이때 sysfs 파일도 생성되지 않은 상태라 `echo` 가 `Permission denied` 로 보고되어 권한 문제로 오인했습니다(→ 3번 항목과 같은 함정).

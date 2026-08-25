@@ -2,7 +2,21 @@
 
 ## [Unreleased]
 ### In Progress
-- 캐릭터 디바이스 인터페이스 (`/dev/my_device`) — `feature/chardev` 브랜치
+- `ioctl` 인터페이스 — 값 전달이 아닌 명령 전달
+- I2C 센서(BH1749NUC) 드라이버 — IIO 서브시스템 등록
+
+## 2026-08-25
+### Added
+- 캐릭터 디바이스 인터페이스 구현 완료 — `/dev/my_device` 로 `read()`/`write()` 동작 검증
+  - `alloc_chrdev_region()` / `cdev_add()` / `class_create()` + `device_create()` 3단계 등록
+  - `copy_from_user()` / `simple_read_from_buffer()` 로 유저 공간 메모리 안전 접근
+  - 등록의 역순으로 되감는 계단식 `goto` 에러 처리
+- 드라이버 소스 및 빌드 Makefile 저장소에 추가 (`drivers/chan_drv/`)
+
+### Fixed
+- `class_create()` 실패 시 생성되지 않은 클래스를 `class_destroy()` 하던 문제
+  - 컴파일 경고(`label 'err_cdev' defined but not used`)가 실제 버그를 가리키고 있었음
+  - 반환 코드도 `-ENODEV` 대신 `PTR_ERR()` 로 실제 원인을 전달하도록 수정
 
 ## 2026-08-23
 ### Changed
