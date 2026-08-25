@@ -44,7 +44,8 @@ x86 WSL2에서 aarch64 커널을 빌드해 RPi4의 순정 커널을 교체했습
 
 → 상세: [TROUBLESHOOTING.md](TROUBLESHOOTING.md#1-커널-이미지-교체-후-부팅-불가)
 
-**<사진>** — WSL 크로스 컴파일 진행 화면 (`build.sh` 실행 중 또는 완료 시점)
+**<<img width="982" height="507" alt="image" src="https://github.com/user-attachments/assets/43e430b6-474c-458a-a50c-370609a3ac4c" />
+>** — WSL(우분투) 크로스 컴파일 진행 화면
 
 **<<img width="618" height="66" alt="image" src="https://github.com/user-attachments/assets/3c232923-1663-41cb-8166-db0fd77d0966" />
 >** — 타깃에서 `uname -a` 출력. 직접 빌드한 `6.12.28-v8+` 커널로 부팅된 것을 보여주는 화면
@@ -92,13 +93,14 @@ echo 1 | sudo tee /sys/devices/platform/my_device/value   # 점등
 echo 0 | sudo tee /sys/devices/platform/my_device/value   # 소등
 ```
 
-배선: GPIO 17 (물리 11번) → 330Ω → LED → GND (물리 6번)
+배선: GPIO 17 (물리 11번) → LED → GND 
 
-**<사진>** — RPi4 + 브레드보드 배선 전경. GPIO 17 → 저항 → LED → GND 연결이 보이도록<ㅅ
+**<<img width="807" height="463" alt="image" src="https://github.com/user-attachments/assets/e4ed0219-a3cf-4cbf-a016-01d3363b62ca" />
+ />
+>** — RPi4 + 브레드보드 배선 전경.
 
-**<사진>** — `echo 1` 로 LED가 점등된 상태
-
-**<사진>** — WSL 쪽 `chan_drv.c` 의 GPIO 확보 코드 화면 (`devm_gpiod_get()` 부분)
+**<<img width="571" height="572" alt="image" src="https://github.com/user-attachments/assets/48fd9e84-99af-4fdd-91d2-387021a89bae" />
+>** — `echo 1` 로 LED가 점등된 상태
 
 ### 4. 디바이스 트리 오버레이 전환 — 완료
 
@@ -122,9 +124,11 @@ echo "dtoverlay=my-device" | sudo tee -a /boot/firmware/config.txt
 
 **결과: 반복 주기에서 커널 빌드가 사라졌습니다.** (DTS 수정 → `dtc` → `scp` → reboot)
 
-**<사진>** — 타깃의 `/boot/firmware/config.txt` 에 `dtoverlay=my-device` 가 등록된 화면
+**<<img width="954" height="968" alt="image" src="https://github.com/user-attachments/assets/cbc75684-e513-48ef-8690-7cf7b5da972a" />
+>** — 타깃의 `/boot/firmware/config.txt` 에 `dtoverlay=my-device` 가 등록된 화면(xshell 캡처화면)
 
-**<사진>** — `ls /proc/device-tree/my_device/` 출력. 베이스 DTB에서 노드를 제거했는데도 프로퍼티가 보이는 것
+**<<img width="414" height="110" alt="image" src="https://github.com/user-attachments/assets/b830cd08-ef41-473e-98e3-e2c92834f7b6" />
+>** — `ls /proc/device-tree/my_device/` 출력. 
 
 ### 5. 캐릭터 디바이스 — 완료
 
@@ -184,11 +188,14 @@ chan_drv: release
 
 `open` / `release` 가 남는 것이 sysfs와의 결정적 차이입니다. sysfs는 접근할 때마다 `show`/`store` 만 호출될 뿐 "열려 있는 상태"라는 개념이 없습니다.
 
-**<사진>** — `insmod` 직후 `dmesg` 출력. probe 로그와 `chardev ready` 줄이 보이도록
+**<<img width="852" height="155" alt="image" src="https://github.com/user-attachments/assets/26176b14-2dc8-401b-94e2-3d5e96a5e950" />
+>** — `insmod` 직후 `dmesg` 출력. probe 로그와 `chardev ready` 줄이 보이도록
 
-**<사진>** — `ls -l /dev/my_device` 와 `cat /dev/my_device` 를 연달아 실행한 화면
+**<<img width="509" height="63" alt="image" src="https://github.com/user-attachments/assets/0d0297e1-9b7c-4e7a-9b88-90ddc2d0bd6e" />
+>** — `ls -l /dev/my_device` 와 `cat /dev/my_device` 를 연달아 실행한 화면
 
-**<사진>** — `rmmod` 전후로 `ls /sys/devices/platform/my_device/` 를 비교한 화면 (`value` 가 사라지는 것)
+**<<img width="491" height="80" alt="image" src="https://github.com/user-attachments/assets/bfe1cadb-1eeb-4a79-8b0f-8b9e04dd3654" />
+>** — `rmmod` 전후로 `ls /sys/devices/platform/my_device/` 를 비교한 화면 (`permission denied` 사진)
 
 **언제 무엇을 쓰는가**
 
