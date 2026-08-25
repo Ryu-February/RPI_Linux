@@ -44,6 +44,10 @@ x86 WSL2에서 aarch64 커널을 빌드해 RPi4의 순정 커널을 교체했습
 
 → 상세: [TROUBLESHOOTING.md](TROUBLESHOOTING.md#1-커널-이미지-교체-후-부팅-불가)
 
+**<사진>** — WSL 크로스 컴파일 진행 화면 (`build.sh` 실행 중 또는 완료 시점)
+
+**<사진>** — 타깃에서 `uname -a` 출력. 직접 빌드한 `6.12.28-v8+` 커널로 부팅된 것을 보여주는 화면
+
 ### 2. 플랫폼 드라이버 + DTS 매칭 — 완료
 
 디바이스 트리에 가상 노드를 선언하고, `of_device_id` 의 `compatible` 문자열로 드라이버를 매칭시켜 `probe()` 를 호출시켰습니다.
@@ -89,7 +93,11 @@ echo 0 | sudo tee /sys/devices/platform/my_device/value   # 소등
 
 배선: GPIO 17 (물리 11번) → 330Ω → LED → GND (물리 6번)
 
-<!-- TODO: LED 점등 사진 docs/led-on.jpg 추가 -->
+**<사진>** — RPi4 + 브레드보드 배선 전경. GPIO 17 → 저항 → LED → GND 연결이 보이도록
+
+**<사진>** — `echo 1` 로 LED가 점등된 상태
+
+**<사진>** — WSL 쪽 `chan_drv.c` 의 GPIO 확보 코드 화면 (`devm_gpiod_get()` 부분)
 
 ### 4. 디바이스 트리 오버레이 전환 — 완료
 
@@ -112,6 +120,10 @@ echo "dtoverlay=my-device" | sudo tee -a /boot/firmware/config.txt
 `-@` 옵션이 핵심입니다. 심볼 정보를 포함시켜야 `&gpio` 같은 라벨이 부팅 시 실제 노드로 연결됩니다.
 
 **결과: 반복 주기에서 커널 빌드가 사라졌습니다.** (DTS 수정 → `dtc` → `scp` → reboot)
+
+**<사진>** — 타깃의 `/boot/firmware/config.txt` 에 `dtoverlay=my-device` 가 등록된 화면
+
+**<사진>** — `ls /proc/device-tree/my_device/` 출력. 베이스 DTB에서 노드를 제거했는데도 프로퍼티가 보이는 것
 
 ### 5. 캐릭터 디바이스 — 완료
 
@@ -171,6 +183,12 @@ chan_drv: release
 
 `open` / `release` 가 남는 것이 sysfs와의 결정적 차이입니다. sysfs는 접근할 때마다 `show`/`store` 만 호출될 뿐 "열려 있는 상태"라는 개념이 없습니다.
 
+**<사진>** — `insmod` 직후 `dmesg` 출력. probe 로그와 `chardev ready` 줄이 보이도록
+
+**<사진>** — `ls -l /dev/my_device` 와 `cat /dev/my_device` 를 연달아 실행한 화면
+
+**<사진>** — `rmmod` 전후로 `ls /sys/devices/platform/my_device/` 를 비교한 화면 (`value` 가 사라지는 것)
+
 **언제 무엇을 쓰는가**
 
 | sysfs | 캐릭터 디바이스 |
@@ -207,7 +225,7 @@ chan_drv: release
 ├── drivers/chan_drv/        # 플랫폼 드라이버 (GPIO + sysfs)
 ├── overlays/                # 디바이스 트리 오버레이
 ├── scripts/build.sh         # 크로스 컴파일 스크립트
-├── docs/                    # 검증 사진 및 로그
+├── docs/                    # 검증 사진 및 로그 (README의 <사진> 자리에 삽입)
 ├── TROUBLESHOOTING.md       # 실패와 해결 기록
 └── CHANGELOG.md
 ```

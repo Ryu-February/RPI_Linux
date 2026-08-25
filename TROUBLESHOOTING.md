@@ -67,7 +67,32 @@ make -C .../linux O=.../out ARCH=arm64 ... M= modules
 
 **증상** — 재부팅 후 `echo 1 > /sys/devices/platform/my_device/value` 가 `Permission denied` 로 실패.
 
-**원인** — `/tmp` 에 두었던 `chan_drv.ko` 가 재부팅으로 사라져 `insmod` 가 실패했고, 그래서 sysfs 파일 자체가 생성되지 않았습니다. 즉 **권한 문제가 아니라 파일 부재**였습니다. 메시지만 보면 오해하기 쉽습니다.
+**원인** — `/tmp` 에 두었던 `chan_drv.ko` 가 재부팅으로 사라져 `insmod` 가 실패했고, 그래서 sysfs 파일 자체가 생성되지 않았습니다. 즉 **권한 문제가 아니라 파일 부재**였습니다.
+
+### 왜 하필 `Permission denied` 인가
+
+`tee` 는 대상 파일이 없으면 **새로 만들려고 시도**합니다. 그런데 sysfs는 가상 파일시스템이라 임의로 파일을 생성할 수 없어, 커널이 `EACCES` 로 거절합니다. **root 로 실행해도 마찬가지입니다 — 권한이 부족한 게 아니라 애초에 만들 수 없는 위치이기 때문입니다.**
+
+```
+파일 없음 → tee 가 생성 시도 → sysfs 거절 → EACCES(Permission denied)
+```
+
+`tee` 의 이 메시지는 세 가지 상황을 구분해주지 못합니다.
+
+| 상황 | `tee` 반응 | 실제 원인 |
+| --- | --- | --- |
+| 파일 있음 + 권한 없음 | `Permission denied` | 진짜 권한 |
+| **파일 없음** | `Permission denied` | 생성 불가 |
+| 파일 있음 + 값 오류 | `Invalid argument` | `kstrtou32()` 실패 |
+
+**확인은 `ls` 나 `cat` 으로 해야 합니다.** `cat` 은 `No such file or directory` 로 정직하게 알려줍니다.
+
+```bash
+ls /sys/devices/platform/my_device/   # value 유무 확인
+sudo cat /sys/devices/platform/my_device/value
+```
+
+같은 메시지를 `rmmod` 직후에도 만납니다. 이때는 **정상 동작**입니다. 모듈을 내리면 `probe()` 가 만든 sysfs 파일과 `/dev` 노드가 함께 사라지므로, 제어가 실패하는 것이 곧 "그 드라이버가 제어하고 있었다"는 증명이 됩니다.
 
 **해결** — 모듈을 정식 위치에 설치.
 
@@ -76,6 +101,8 @@ sudo mkdir -p /lib/modules/$(uname -r)/extra
 sudo cp chan_drv.ko /lib/modules/$(uname -r)/extra/
 sudo depmod -a && sudo modprobe chan_drv
 ```
+
+> **교훈** — 에러 메시지가 실제 원인을 가리키지 않는 경우가 있다. `tee` 대신 `cat`/`ls` 로 한 번 더 확인한다.
 
 ---
 
