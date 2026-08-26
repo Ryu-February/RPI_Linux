@@ -265,7 +265,8 @@ echo heartbeat | sudo tee /sys/class/leds/chan:led/trigger
 
 LED가 심장박동 패턴으로 점멸합니다. **해당 코드는 작성하지 않았습니다.** 커널의 heartbeat 트리거가 타이머를 돌리며 `chan_led_set()` 을 반복 호출합니다. `timer` 트리거를 쓰면 `delay_on` / `delay_off` 로 주기도 지정할 수 있습니다.
 
-**<사진 1>** — `docs/led-trigger-shell.png`
+**<<img width="857" height="291" alt="image" src="https://github.com/user-attachments/assets/f8a43ac2-c642-451b-9ef5-a38dadded737" />
+>** — `docs/led-trigger-shell.png`
 터미널(Xshell)에서 트리거를 실제로 조작한 화면. 한 화면에 아래가 함께 보이면 좋습니다.
 
 ```bash
@@ -277,7 +278,8 @@ dmesg | tail -3
 
 점멸 자체는 정지 화면에 담기지 않으므로, **`trigger` 목록에서 `[heartbeat]` 가 선택 표시된 출력**이 그 역할을 대신합니다. 커널이 패턴을 맡고 있다는 증거입니다.
 
-**<사진 2>** — `docs/vscode-build.png`
+**<<img width="1310" height="978" alt="image" src="https://github.com/user-attachments/assets/049b4e37-dbf0-493c-a990-c918a05f86fc" />
+>** — `docs/vscode-build.png`
 VS Code(WSL 원격)에서 `chan_drv.c` 의 `chan_led_set()` 부분과 통합 터미널의 빌드 로그(`CC [M] chan_drv.o`)가 한 화면에 잡힌 캡처. 코드와 빌드 결과를 같이 담아 **크로스 컴파일 환경**을 보여줍니다.
 
 > **참고** — 현재 드라이버는 같은 GPIO를 세 경로(`value`, `/dev/my_device`, `brightness`)로 제어합니다. **비교 학습을 위해 의도적으로 병기한 것이며, 실제 제품이라면 LED 서브시스템 하나만 남깁니다.**
