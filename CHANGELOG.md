@@ -5,6 +5,21 @@
 - `ioctl` 인터페이스 — 값 전달이 아닌 명령 전달
 - I2C 센서(BH1749NUC) 드라이버 — IIO 서브시스템 등록
 
+## 2026-08-26
+### Added
+- LED 서브시스템 등록 — `/sys/class/leds/chan:led/` 표준 인터페이스 제공
+  - `devm_led_classdev_register()` 로 등록, `brightness_set`/`brightness_get` 콜백 구현
+  - `trigger` (heartbeat, timer, cpu 등) 가 별도 구현 없이 동작함을 확인
+  - LED 등록 실패 시 `device_create` 까지 되감도록 `err_device` 라벨 추가
+- README에 검증 사진 삽입 자리(`<사진>`) 10곳 표시, `docs/README.md` 로 필요 목록 정리
+
+### Changed
+- `class_create()` 실패 시 반환 코드를 `-ENODEV` 에서 `PTR_ERR()` 로 변경
+
+### Fixed
+- TROUBLESHOOTING 3번 보강 — `tee` 가 파일 부재를 `Permission denied` 로 보고하는
+  이유(sysfs 파일 생성 불가 → `EACCES`)와 `ls`/`cat` 으로 구분하는 방법
+
 ## 2026-08-25
 ### Added
 - 캐릭터 디바이스 인터페이스 구현 완료 — `/dev/my_device` 로 `read()`/`write()` 동작 검증

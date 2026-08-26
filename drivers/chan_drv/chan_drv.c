@@ -6,6 +6,7 @@
 #include <linux/fs.h>
 #include <linux/device.h>
 #include <linux/uaccess.h>
+#include <linux/leds.h>
 
 static u32 my_value;
 static struct gpio_desc *my_gpio;
@@ -13,6 +14,7 @@ static struct gpio_desc *my_gpio;
 static dev_t chan_devt;
 static struct cdev chan_cdev;
 static struct class *chan_class;
+static struct led_classdev chan_led;
 
 static ssize_t value_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
@@ -39,7 +41,7 @@ static ssize_t value_store(struct device *dev, struct device_attribute *attr, co
 
 static DEVICE_ATTR_RW(value);
 
-/*신규*/
+/* ---------- 캐릭터 디바이스 ---------- */
 
 static int chan_open(struct inode *inode, struct file *filp)
 {
@@ -98,6 +100,19 @@ static const struct file_operations chan_fops = {
 	.read	= chan_read,
 	.write	= chan_write,
 };
+
+static void chan_led_set(struct led_classdev *cdev, enum led_brightness b)
+{
+	if (my_gpio)
+		gpiod_set_value(my_gpio, b ? 1 : 0);
+
+	my_value = b;
+}
+
+static enum led_brightness chan_led_get(struct led_classdev *cdev)
+{
+	return my_value ? LED_ON : LED_OFF;
+}
 
 static int my_probe(struct platform_device *pdev)
 {
@@ -165,11 +180,26 @@ static int my_probe(struct platform_device *pdev)
 		goto err_class;
 	}
 
+	chan_led.name = "chan:led";
+	chan_led.max_brightness = LED_ON;
+	chan_led.brightness_set = chan_led_set;
+	chan_led.brightness_get = chan_led_get;
+	chan_led.default_trigger = NULL;
+
+	ret = devm_led_classdev_register(dev, &chan_led);
+	if (ret) {
+		dev_err(dev, "led_classdev register failed (%d)\n", ret);
+		goto err_device;
+	}
+	dev_info(dev, "led ready: /sys/class/leds/%s/brightness\n", chan_led.name);
+
 	dev_info(dev, "chardev ready: /dev/my_device (major=%d minor=%d)\n",
 		MAJOR(chan_devt), MINOR(chan_devt));
 	dev_info(dev, "sysfs ready: /sys/devices/platform/my_device/value\n");
 	return 0;
 
+	err_device:
+		device_destroy(chan_class, chan_devt);
 	err_class:
 		class_destroy(chan_class);
 	err_cdev:
