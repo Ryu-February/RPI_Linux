@@ -30,6 +30,9 @@
 make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
      modules_install INSTALL_MOD_PATH=./modules_out
 ```
+<img width="1126" height="597" alt="image" src="https://github.com/user-attachments/assets/c1daec13-580b-486f-bf19-6e4ded48c6a0" />
+<lib/modules 복사 후 share 폴더 캡처 이미지>
+
 
 생성된 모듈을 타깃의 `/lib/modules/` 로 옮기니 정상 부팅했습니다.
 
