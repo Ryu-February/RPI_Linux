@@ -16,6 +16,7 @@
 - 보드 DTS 직접 수정 → **디바이스 트리 오버레이** 방식으로 전환
 - 캐릭터 디바이스(`/dev`) 인터페이스 — `file_operations`, `copy_from_user()`, 계단식 에러 처리
 - **LED 서브시스템** 등록 — 직접 만든 sysfs를 커널 표준 인터페이스로 대체
+- I2C 통신 확인 및 **메인라인 미지원 칩(BH1749NUC)** 드라이버 작성 *(진행 중)*
 
 ---
 
@@ -284,6 +285,80 @@ VS Code(WSL 원격)에서 `chan_drv.c` 의 `chan_led_set()` 부분과 통합 터
 
 > **참고** — 현재 드라이버는 같은 GPIO를 세 경로(`value`, `/dev/my_device`, `brightness`)로 제어합니다. **비교 학습을 위해 의도적으로 병기한 것이며, 실제 제품이라면 LED 서브시스템 하나만 남깁니다.**
 
+### 7. I2C 컬러센서 (BH1749NUC) — 진행 중
+
+**메인라인에 드라이버가 없는 칩**을 대상으로 골랐습니다. 커널 트리에는 같은 벤더의 인접 모델만 있습니다.
+
+| 칩 | 커널 드라이버 |
+| --- | --- |
+| BH1745 (RGB+C) | `drivers/iio/light/bh1745.c` |
+| BH1750 (조도) | `drivers/iio/light/bh1750.c` |
+| BH1780 (조도) | `drivers/iio/light/bh1780.c` |
+| **BH1749NUC (RGB+IR)** | **없음** |
+
+기존 드라이버를 적재해 동작을 확인하는 것과, **데이터시트를 읽고 지원되지 않는 칩을 동작시키는 것**은 다른 작업입니다. 후자를 해보기 위해 이 칩을 택했습니다. `bh1745.c` 는 `regmap` 과 IIO triggered buffer를 사용하는 최신 구조라 참고 대상으로도 적절합니다.
+
+#### 하드웨어 준비
+
+BH1749NUC가 실장된 기존 보드에서 I2C 4선(VCC · GND · SDA · SCL)을 직접 인출해 RPi4의 GPIO 헤더에 연결했습니다.
+
+| 신호 | RPi4 물리 핀 |
+| --- | --- |
+| VCC | 1번 (3.3V) |
+| GND | 6번 |
+| SDA | 3번 (GPIO2) |
+| SCL | 5번 (GPIO3) |
+
+브레이크아웃 모듈을 구입하는 대신 실장된 칩에서 배선한 것은, **데이터시트만 가지고 통신을 성립시키는 과정 자체를 겪어보기 위해서**였습니다. 3.3V 소자이고 RPi의 I2C 라인도 3.3V라 레벨 변환 없이 직결했습니다.
+
+#### 통신 확인
+
+```bash
+sudo raspi-config nonint do_i2c 0     # 또는 config.txt 에 dtparam=i2c_arm=on
+sudo i2cdetect -y 1
+```
+
+주소가 잡히면 **기대값을 아는 고정 레지스터**를 먼저 읽습니다.
+
+```bash
+sudo i2cget -y 1 0x38 0x92
+# 0xe0
+```
+
+| 레지스터 | 주소 | 읽은 값 | 의미 |
+| --- | --- | --- | --- |
+| `MANUFACTURER_ID` | `0x92` | `0xE0` | ROHM 제조사 ID |
+
+데이터시트: [ROHM BH1749NUC](https://www.rohm.com/products/sensors-mems/color-sensor-ics/bh1749nuc-product)
+
+**센서 값보다 ID 레지스터를 먼저 읽는 이유**는 통신 경로 전체를 한 번에 검증하기 위해서입니다. 이 값이 나왔다는 것은 배선 극성, 전원, 주소, 칩 응답이 모두 정상이라는 뜻입니다. 센서 값부터 읽으면 결과가 이상할 때 배선 문제인지 설정 문제인지 구분할 수 없습니다.
+
+드라이버 `probe()` 에서도 같은 검사를 수행하고, 값이 맞지 않으면 probe를 실패시키는 것이 관례입니다.
+
+**<사진>** — `docs/i2c-detect.png` : `i2cdetect` 주소 표와 `i2cget` 의 `0xe0` 출력이 한 화면에
+
+#### 남은 단계
+
+| 단계 | 내용 | 상태 |
+| --- | --- | --- |
+| 0 | 배선 · `i2cdetect` · 제조사 ID 확인 | 완료 |
+| 1 | 디바이스 트리 오버레이 (`target = <&i2c1>`) | 진행 중 |
+| 2 | 최소 `i2c_driver` — probe에서 칩 ID 검사 | |
+| 3 | 초기화 시퀀스 + RGB/IR 레지스터 읽기 | |
+| 4 | IIO 서브시스템 등록 | |
+| 5 | (선택) INT 핀 인터럽트 | |
+
+4단계까지 가면 표준 경로가 생깁니다.
+
+```
+/sys/bus/iio/devices/iio:device0/in_intensity_red_raw
+/sys/bus/iio/devices/iio:device0/in_intensity_green_raw
+/sys/bus/iio/devices/iio:device0/in_intensity_blue_raw
+/sys/bus/iio/devices/iio:device0/in_intensity_ir_raw
+```
+
+6절의 LED 서브시스템과 구조가 동일합니다 — 구조체를 채우고, 콜백을 등록하고, `iio_device_register()` 를 호출합니다. 표준을 따르므로 `iio_info` 같은 기존 도구가 그대로 동작합니다.
+
 ## 배운 것
 
 **드라이버에 하드웨어 정보를 박지 않는다.**
@@ -346,4 +421,5 @@ sudo depmod -a && sudo modprobe chan_drv
 - [ ] 전역 변수 제거 — 디바이스별 구조체 + `platform_set_drvdata()` 로 다중 인스턴스 대응
 - [ ] 동시 접근 보호 — mutex 도입
 - [ ] 입력 핀 + 인터럽트 — 버튼 입력에 대한 ISR 처리
-- [ ] I2C 센서 연동 — 오버레이 `target = <&i2c1>` 형태 적용
+- [ ] BH1749NUC — IIO 서브시스템 등록 및 RGB/IR 값 읽기
+- [ ] 인터럽트 처리 — 센서 INT 핀 또는 버튼 입력에 대한 ISR
