@@ -337,14 +337,139 @@ sudo i2cget -y 1 0x38 0x92
 
 **<사진>** — `docs/i2c-detect.png` : `i2cdetect` 주소 표와 `i2cget` 의 `0xe0` 출력이 한 화면에
 
+#### 디바이스 트리 오버레이
+
+`target-path` 대신 **`target = <&i2c1>`** 을 씁니다. I2C 장치는 컨트롤러 노드 안에 있어야 커널이 해당 버스의 장치로 등록합니다. 루트 밑에 두면 플랫폼 디바이스가 되어 I2C로 인식되지 않습니다.
+
+```dts
+fragment@0 {
+	target = <&i2c1>;
+	__overlay__ {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "okay";
+
+		bh1749_a: light-sensor@38 {
+			compatible = "rohm,bh1749";
+			reg = <0x38>;
+			status = "okay";
+		};
+
+		bh1749_b: light-sensor@39 {
+			compatible = "rohm,bh1749";
+			reg = <0x39>;
+			status = "okay";
+		};
+	};
+};
+```
+
+`reg` 가 I2C 주소이고 노드 이름의 `@38` 과 일치해야 합니다. `#address-cells = <1>` / `#size-cells = <0>` 은 자식 노드의 `reg` 해석 방식을 지정합니다 — I2C는 주소 1개, 크기 없음.
+
+**보드에 같은 칩이 두 개 실장되어 있어** 노드를 두 개 선언했습니다. BH1749NUC는 ADDR 핀으로 주소가 갈리므로 `0x38` 과 `0x39` 를 동시에 사용합니다.
+
+```bash
+ls /sys/bus/i2c/devices/
+# 1-0038  1-0039  i2c-1  i2c-20  i2c-21
+```
+
+#### i2c_driver
+
+플랫폼 드라이버와 골격은 같지만 버스가 다릅니다.
+
+| | `platform_driver` | `i2c_driver` |
+| --- | --- | --- |
+| 등록 매크로 | `module_platform_driver()` | `module_i2c_driver()` |
+| probe 인자 | `struct platform_device *` | `struct i2c_client *` |
+| 주소 정보 | 없음 | `client->addr` 에 이미 채워짐 |
+| 통신 | 직접 | `i2c_smbus_*` 헬퍼 |
+
+```c
+static int bh1749_probe(struct i2c_client *client)
+{
+	struct device *dev = &client->dev;
+	int ret;
+
+	dev_info(dev, "probe called (addr=0x%02x)\n", client->addr);
+
+	if (!i2c_check_functionality(client->adapter,
+				     I2C_FUNC_SMBUS_BYTE_DATA))
+		return -EOPNOTSUPP;
+
+	ret = i2c_smbus_read_byte_data(client, BH1749_MANUFACTURER_ID);
+	if (ret < 0)
+		return ret;
+
+	dev_info(dev, "manufacturer id = 0x%02x\n", ret);
+
+	if (ret != BH1749_MANUFACTURER_ROHM) {
+		dev_err(dev, "unexpected manufacturer id 0x%02x\n", ret);
+		return -ENODEV;
+	}
+	...
+}
+```
+
+**드라이버 코드 어디에도 `0x38` 이 없습니다.** `client->addr` 은 DTS의 `reg` 를 커널이 읽어 채워준 값입니다. 주소를 바꾸려면 오버레이 한 줄만 고치면 됩니다 — GPIO 절에서 핀 번호를 다룬 방식과 동일합니다.
+
+`i2c_check_functionality()` 로 어댑터가 필요한 전송 방식을 지원하는지 먼저 확인하고, 칩 ID가 기대값과 다르면 `-ENODEV` 로 probe를 실패시킵니다. 같은 주소에 다른 칩이 있을 수 있기 때문입니다.
+
+**검증 결과**
+
+```
+bh1749 1-0039: probe called (addr=0x39)
+bh1749 1-0039: manufacturer id = 0xe0
+bh1749 1-0039: part id = 0x0d (raw 0x0d)
+bh1749 1-0039: chip detected
+bh1749 1-0038: probe called (addr=0x38)
+bh1749 1-0038: manufacturer id = 0xe0
+bh1749 1-0038: part id = 0x0d (raw 0x0d)
+bh1749 1-0038: chip detected
+```
+
+```bash
+$ ls -l /sys/bus/i2c/devices/1-0038/driver
+... -> ../../../../../../bus/i2c/drivers/bh1749
+
+$ sudo i2cdetect -y 1
+30: -- -- -- -- -- -- -- -- UU UU -- -- -- -- -- --
+```
+
+**주소가 `UU` 로 바뀐 것이 소유권 이전의 증거입니다.** `UU` 는 Used/Unavailable, 즉 드라이버가 점유 중이라 `i2cdetect` 가 프로브하지 않았다는 뜻입니다. 이제 이 칩은 유저 공간 도구가 아니라 드라이버가 관리합니다.
+
+**<사진>** — `docs/i2c-probe.png` : `dmesg` 의 probe 로그(두 인스턴스)와 `i2cdetect` 의 `UU UU` 가 한 화면에
+
+#### 인스턴스가 둘이면 전역 변수를 쓸 수 없다
+
+**모듈은 하나인데 장치는 둘입니다.** 커널이 `.ko` 를 두 번 적재하는 것이 아니라 같은 코드가 인스턴스별로 실행됩니다. 전역 변수를 쓰면 두 센서가 같은 저장소를 공유해 값이 섞입니다.
+
+```c
+struct bh1749_data {
+	struct i2c_client *client;
+	struct mutex lock;
+	u16 red, green, blue, ir;
+};
+
+data = devm_kzalloc(&client->dev, sizeof(*data), GFP_KERNEL);
+if (!data)
+	return -ENOMEM;
+
+data->client = client;
+i2c_set_clientdata(client, data);
+```
+
+`devm_kzalloc()` 이 디바이스마다 별도 메모리를 할당하고, `i2c_set_clientdata()` 로 client에 연결해 두면 이후 `i2c_get_clientdata()` 로 꺼내 씁니다. probe가 두 번 불리면 메모리도 두 덩어리가 잡혀 서로 간섭하지 않습니다.
+
+`drivers/chan_drv/` 에서는 전역 변수를 쓰고 있으며 이는 개선 대상으로 남겨 두었습니다. 이 드라이버는 처음부터 인스턴스별 구조체로 작성합니다.
+
 #### 남은 단계
 
 | 단계 | 내용 | 상태 |
 | --- | --- | --- |
 | 0 | 배선 · `i2cdetect` · 제조사 ID 확인 | 완료 |
-| 1 | 디바이스 트리 오버레이 (`target = <&i2c1>`) | 진행 중 |
-| 2 | 최소 `i2c_driver` — probe에서 칩 ID 검사 | |
-| 3 | 초기화 시퀀스 + RGB/IR 레지스터 읽기 | |
+| 1 | 디바이스 트리 오버레이 (`target = <&i2c1>`, 노드 2개) | 완료 |
+| 2 | 최소 `i2c_driver` — probe에서 칩 ID 검사 | 완료 |
+| 3 | 디바이스별 구조체 + 초기화 시퀀스 + RGB/IR 읽기 | 진행 중 |
 | 4 | IIO 서브시스템 등록 | |
 | 5 | (선택) INT 핀 인터럽트 | |
 
@@ -382,7 +507,8 @@ LED 서브시스템의 결과물도 결국 sysfs 파일입니다. 차이는 그 
 
 ```
 .
-├── drivers/chan_drv/        # 플랫폼 드라이버 (GPIO + sysfs)
+├── drivers/chan_drv/        # 플랫폼 드라이버 (GPIO + sysfs + chardev + LED)
+├── drivers/bh1749/          # I2C 컬러센서 드라이버 (BH1749NUC)
 ├── overlays/                # 디바이스 트리 오버레이
 ├── scripts/build.sh         # 크로스 컴파일 스크립트
 ├── docs/                    # 검증 사진 및 로그 (README의 <사진> 자리에 삽입)

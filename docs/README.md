@@ -25,6 +25,7 @@ README 본문의 **<사진>** 표시 자리에 넣을 검증 자료를 모아두
 | `led-trigger-shell.png` | 터미널에서 `trigger` 조작 — `[heartbeat]` 선택 표시가 보이도록 |
 | `vscode-build.png` | VS Code(WSL 원격) — 코드와 빌드 로그를 한 화면에 |
 | `i2c-detect.png` | `i2cdetect` 주소 표 + `i2cget` 의 `0xe0` 출력 |
+| `i2c-probe.png` | `dmesg` probe 로그(두 인스턴스) + `i2cdetect` 의 `UU UU` |
 
 사진은 **내용이 읽히는 해상도**로. 터미널 캡처는 폰트가 작으면 의미가 없습니다.
 

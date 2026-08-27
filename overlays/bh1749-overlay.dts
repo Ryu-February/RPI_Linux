@@ -1,0 +1,27 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "brcm,bcm2711";
+
+    fragment@0 {
+        target = <&i2c1>;
+        __overlay__ {
+            #address-cells = <1>;
+            #size-cells = <0>;
+            status = "okay";
+
+            bh1749_a: light-sensor@38 {
+                compatible = "rohm,bh1749";
+                reg = <0x38>;
+                status = "okay";
+            };
+            
+            bh1749_b: light-sensor@39 {
+                compatible = "rohm,bh1749";
+                reg = <0x39>;
+                status = "okay";
+            };
+        };
+    };
+};

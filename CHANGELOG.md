@@ -3,7 +3,15 @@
 ## [Unreleased]
 ### In Progress
 - `ioctl` 인터페이스 — 값 전달이 아닌 명령 전달
-- I2C 센서(BH1749NUC) 드라이버 — IIO 서브시스템 등록
+- BH1749NUC — 초기화 시퀀스, RGB/IR 읽기, IIO 서브시스템 등록
+
+## 2026-08-27
+### Added
+- BH1749NUC I2C 드라이버 골격 (`drivers/bh1749/`)
+  - 디바이스 트리 오버레이 — `target = <&i2c1>`, 노드 2개(`@38`, `@39`)
+  - `i2c_driver` probe — `i2c_check_functionality()` 및 제조사 ID 검사
+  - `MANUFACTURER_ID` = `0xE0`, `PART_ID` = `0x0D` 확인
+  - 보드에 동일 칩 2개가 실장되어 probe가 두 번 호출됨을 확인
 
 ## 2026-08-26
 ### Added
