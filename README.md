@@ -16,7 +16,7 @@
 - 보드 DTS 직접 수정 → **디바이스 트리 오버레이** 방식으로 전환
 - 캐릭터 디바이스(`/dev`) 인터페이스 — `file_operations`, `copy_from_user()`, 계단식 에러 처리
 - **LED 서브시스템** 등록 — 직접 만든 sysfs를 커널 표준 인터페이스로 대체
-- I2C 통신 확인 및 **메인라인 미지원 칩(BH1749NUC)** 드라이버 작성 *(진행 중)*
+- I2C 통신 확인 및 **메인라인 미지원 칩(BH1749NUC)** 드라이버 작성 — 데이터시트 기반 초기화, RGB/IR 측정값 노출 *(IIO 등록 진행 중)*
 
 ---
 
@@ -462,6 +462,145 @@ i2c_set_clientdata(client, data);
 
 `drivers/chan_drv/` 에서는 전역 변수를 쓰고 있으며 이는 개선 대상으로 남겨 두었습니다. 이 드라이버는 처음부터 인스턴스별 구조체로 작성합니다.
 
+#### 레지스터 맵 (데이터시트)
+
+| 주소 | 이름 | 내용 |
+| --- | --- | --- |
+| `0x40` | SYSTEM_CONTROL | D7 `SW RESET`, D6 `INT RESET`, D5–D0 `PART ID` = `0x0D` |
+| `0x41` | MODE_CONTROL1 | D6–D5 `IR GAIN`, D4–D3 `RGB GAIN`, D2–D0 `MEASUREMENT MODE` |
+| `0x42` | MODE_CONTROL2 | D7 `VALID`, D4 `RGB_EN` |
+| `0x50`/`0x51` | RED_DATA | LSB / MSB |
+| `0x52`/`0x53` | GREEN_DATA | |
+| `0x54`/`0x55` | BLUE_DATA | |
+| `0x56`/`0x57` | RESERVED | 건너뜀 |
+| `0x58`/`0x59` | IR_DATA | |
+| `0x5A`/`0x5B` | GREEN2_DATA | |
+| `0x92` | MANUFACTURER_ID | `0xE0` |
+
+데이터시트에서 확인한 제약이 몇 가지 있습니다.
+
+- **게인은 `01`(x1) 과 `11`(x32) 만 유효**합니다. `00`, `10` 은 *Forbidden to use*
+- **측정 모드도 `010`(120ms), `011`(240ms), `101`(35ms) 만 유효**
+- 데이터는 **낮은 주소가 LSB** — 리틀 엔디안이라 `i2c_smbus_read_word_data()` 를 그대로 쓸 수 있습니다
+- `VALID` 비트는 **읽는 순간 클리어**되고, `0x41`·`0x42` 등 설정 레지스터에 쓰면 0이 됩니다
+- 표에 없는 주소에는 아무것도 쓰지 말 것
+
+x1 게인 + 120ms 설정값은 이렇게 계산됩니다.
+
+```
+IR GAIN  = 01  → bits[6:5] = 0x20
+RGB GAIN = 01  → bits[4:3] = 0x08
+MEAS     = 010 → bits[2:0] = 0x02
+                       합계 = 0x2A
+```
+
+#### 드라이버를 쓰기 전에 유저 공간에서 먼저 검증
+
+초기화 시퀀스를 드라이버 안에서 바로 시도하면, 값이 나오지 않을 때 원인 후보가 둘입니다 — 시퀀스가 틀렸거나, 드라이버 코드가 틀렸거나. **`i2cset`/`i2cget` 으로 먼저 성립시키면 검증된 시퀀스를 손에 쥐고 코드로 옮기는 것**이 됩니다.
+
+```bash
+sudo rmmod bh1749                        # 드라이버가 점유 중이면 도구가 접근 못 함
+sudo i2cset -y 1 0x38 0x40 0x80          # 소프트 리셋
+sudo i2cset -y 1 0x38 0x41 0x2A          # 게인 x1, 120ms
+sudo i2cset -y 1 0x38 0x42 0x10          # RGB_EN — 측정 시작
+sleep 1
+sudo i2cget -y 1 0x38 0x42               # 0x90 이면 VALID=1, RGB_EN=1
+sudo i2cget -y 1 0x38 0x50 w             # RED (2바이트 한 번에)
+```
+
+`w` 옵션은 레지스터 주소를 한 번만 보내고 2바이트를 연속으로 받습니다. **바이트를 따로 두 번 읽으면 그 사이에 측정이 갱신되어 옛 LSB + 새 MSB 조합이 만들어질 수 있습니다.** 16비트 이상 센서에서 값이 간헐적으로 튀는 전형적인 원인입니다.
+
+#### 인스턴스별 상태 분리
+
+```c
+struct bh1749_data {
+	struct i2c_client *client;
+	struct mutex lock;
+};
+
+data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
+if (!data)
+	return -ENOMEM;
+
+data->client = client;
+mutex_init(&data->lock);
+i2c_set_clientdata(client, data);
+```
+
+sysfs 콜백에서는 `struct device *` 를 받아 역으로 꺼냅니다.
+
+```c
+struct bh1749_data *data = i2c_get_clientdata(to_i2c_client(dev));
+```
+
+전역 변수를 전혀 쓰지 않으므로 두 센서가 서로 간섭하지 않습니다.
+
+#### 속성 그룹으로 sysfs 자동 생성
+
+`chan_drv` 에서는 `device_create_file()` 로 직접 만들고 `remove()` 에서 지웠습니다. 여기서는 드라이버에 속성 그룹을 등록해 두는 방식을 썼습니다.
+
+```c
+static struct attribute *bh1749_attrs[] = {
+	&dev_attr_red.attr,
+	&dev_attr_green.attr,
+	&dev_attr_blue.attr,
+	&dev_attr_ir.attr,
+	&dev_attr_green2.attr,
+	&dev_attr_valid.attr,
+	NULL
+};
+ATTRIBUTE_GROUPS(bh1749);
+
+static struct i2c_driver bh1749_driver = {
+	.driver = {
+		.name = "bh1749",
+		.of_match_table = bh1749_of_match,
+		.dev_groups = bh1749_groups,
+	},
+	...
+};
+```
+
+**커널이 장치마다 알아서 생성하고 제거합니다.** 정리 코드가 필요 없고, 인스턴스가 둘이면 양쪽에 모두 생깁니다. 채널 4개는 동일한 형태라 매크로로 묶었습니다.
+
+```c
+#define BH1749_CHANNEL_ATTR(name, reg)					static ssize_t name##_show(struct device *dev,							   struct device_attribute *attr, char *buf)	{										return bh1749_show_channel(dev, reg, buf);			}									static DEVICE_ATTR_RO(name)
+```
+
+#### 검증
+
+```
+bh1749 1-0039: probe called (addr=0x39)
+bh1749 1-0039: BH1749NUC ready (part id 0x0d)
+bh1749 1-0039: initial red = 8
+bh1749 1-0038: probe called (addr=0x38)
+bh1749 1-0038: BH1749NUC ready (part id 0x0d)
+bh1749 1-0038: initial red = 9
+```
+
+```bash
+$ ls /sys/bus/i2c/devices/1-0038/
+blue  driver  green  green2  ir  modalias  name  of_node  power  red  subsystem  uevent  valid
+
+$ cd /sys/bus/i2c/devices/1-0038 && cat red green blue ir
+9
+26
+11
+0
+```
+
+실내 조명에서 녹색 채널이 가장 큰 것은 정상입니다. 센서를 가리면 전 채널이 함께 떨어지고, 리모컨을 향하면 `ir` 만 급등합니다.
+
+**두 인스턴스의 `initial red` 가 각각 8, 9 로 다르게 나온 것**이 상태 분리가 실제로 동작한다는 증거입니다. 전역 변수를 썼다면 두 장치가 같은 값을 보고했을 것입니다.
+
+```bash
+grep . /sys/bus/i2c/devices/1-003{8,9}/red
+```
+
+한쪽 센서만 가렸을 때 그쪽 값만 변합니다.
+
+**<사진>** — `docs/i2c-sensor-read.png` : 두 인스턴스의 채널 값과, 한쪽을 가렸을 때의 변화
+
 #### 남은 단계
 
 | 단계 | 내용 | 상태 |
@@ -469,8 +608,8 @@ i2c_set_clientdata(client, data);
 | 0 | 배선 · `i2cdetect` · 제조사 ID 확인 | 완료 |
 | 1 | 디바이스 트리 오버레이 (`target = <&i2c1>`, 노드 2개) | 완료 |
 | 2 | 최소 `i2c_driver` — probe에서 칩 ID 검사 | 완료 |
-| 3 | 디바이스별 구조체 + 초기화 시퀀스 + RGB/IR 읽기 | 진행 중 |
-| 4 | IIO 서브시스템 등록 | |
+| 3 | 디바이스별 구조체 + 초기화 시퀀스 + RGB/IR 읽기 | 완료 |
+| 4 | IIO 서브시스템 등록 | 진행 중 |
 | 5 | (선택) INT 핀 인터럽트 | |
 
 4단계까지 가면 표준 경로가 생깁니다.

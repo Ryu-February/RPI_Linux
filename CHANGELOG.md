@@ -3,7 +3,20 @@
 ## [Unreleased]
 ### In Progress
 - `ioctl` 인터페이스 — 값 전달이 아닌 명령 전달
-- BH1749NUC — 초기화 시퀀스, RGB/IR 읽기, IIO 서브시스템 등록
+- BH1749NUC — IIO 서브시스템 등록
+
+## 2026-08-28
+### Added
+- BH1749NUC 측정값 읽기 구현
+  - 데이터시트 기반 초기화 시퀀스 (SW reset → 게인/측정주기 → RGB_EN)
+  - `i2c_smbus_read_word_data()` 로 16비트 채널값 원자적 읽기
+  - RED / GREEN / BLUE / IR / GREEN2 / VALID sysfs 속성
+  - `.dev_groups` 로 속성 그룹 등록 — 생성·제거를 커널이 처리
+  - `devm_kzalloc` + `i2c_set_clientdata` 로 인스턴스별 상태 분리
+  - 두 센서가 서로 다른 값을 보고하는 것으로 분리 동작 확인
+
+### Fixed
+- `GENMASK()` 결과를 `%02x` 로 출력하며 발생한 타입 불일치 경고 — `(u8)` 캐스트
 
 ## 2026-08-27
 ### Added
