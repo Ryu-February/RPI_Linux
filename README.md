@@ -33,9 +33,9 @@
 | [4](docs/04-device-tree-overlay.md) | 디바이스 트리 오버레이 전환 | `.dtbo`, `dtc -@`, `config.txt` |
 | [5](docs/05-char-device.md) | 캐릭터 디바이스 | `cdev`, `file_operations`, `copy_from_user()` |
 | [6](docs/06-led-subsystem.md) | LED 서브시스템 | `led_classdev`, `trigger` |
-| [7](docs/07-i2c-bh1749.md) | I2C 컬러센서 (BH1749NUC) *(진행 중)* | `i2c_driver`, 데이터시트 기반 구현 |
+| [7](docs/07-i2c-bh1749.md) | I2C 컬러센서 (BH1749NUC) | `i2c_driver`, IIO 서브시스템, 데이터시트 기반 구현 |
 
-7단계는 **메인라인 커널에 드라이버가 없는 칩**을 대상으로 했습니다. 데이터시트를 읽고 레지스터 맵과 초기화 시퀀스를 직접 구현했으며, 현재 IIO 서브시스템 등록을 진행 중입니다.
+7단계는 **메인라인 커널에 드라이버가 없는 칩**을 대상으로 했습니다. 데이터시트를 읽고 레지스터 맵과 초기화 시퀀스를 직접 구현한 뒤, IIO 서브시스템에 등록해 `in_intensity_red_raw` 같은 표준 경로를 제공합니다. 보드에 동일 칩이 두 개 실장되어 있어 인스턴스별 상태 분리도 함께 다뤘습니다.
 
 ---
 
@@ -108,7 +108,7 @@ sudo depmod -a && sudo modprobe chan_drv
 
 ## 다음 계획
 
-- [ ] BH1749NUC — IIO 서브시스템 등록으로 `in_intensity_*_raw` 표준 경로 제공
+- [ ] BH1749NUC — `scale` 속성 추가 및 게인 변경 지원
 - [ ] 인터럽트 처리 — 센서 INT 핀에 대한 ISR 과 bottom half
 - [ ] 동시 접근 보호 — mutex 도입 및 경쟁 상태 재현
 - [ ] `chan_drv` 전역 변수 제거 — 디바이스별 구조체 + `platform_set_drvdata()`

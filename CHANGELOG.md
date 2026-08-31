@@ -2,8 +2,24 @@
 
 ## [Unreleased]
 ### In Progress
+- BH1749NUC — `scale` 속성 및 INT 핀 인터럽트
 - `ioctl` 인터페이스 — 값 전달이 아닌 명령 전달
-- BH1749NUC — IIO 서브시스템 등록
+
+## 2026-08-28 (2)
+### Added
+- BH1749NUC IIO 서브시스템 등록 — `/sys/bus/iio/devices/iio:deviceN/`
+  - `iio_chan_spec` 로 RED/GREEN/BLUE/IR 채널 선언
+  - `read_raw` 콜백 하나가 `chan->address` 로 네 채널 처리
+  - `devm_iio_device_alloc()` + `iio_priv()` 로 인스턴스별 데이터 분리
+  - `devm_add_action_or_reset()` 로 해제 시 센서 전원 차단
+  - `iio_info` 등 기존 도구가 별도 작업 없이 동작함을 확인
+
+### Removed
+- 직접 구현했던 sysfs 속성 일체 (`show` 함수, 속성 매크로, `.dev_groups`)
+  — IIO가 표준 경로를 생성하므로 불필요
+
+### Docs
+- README를 표지로 재구성하고 단계별 상세를 `docs/01`~`docs/07` 로 분리
 
 ## 2026-08-28
 ### Added

@@ -13,6 +13,7 @@
 #include <linux/bits.h>
 #include <linux/delay.h>
 #include <linux/mutex.h>
+#include <linux/iio/iio.h>
 
 #define BH1749_SYS_CTRL                 0x40
 #define BH1749_SYS_CTRL_SW_RESET        BIT(7)
@@ -47,67 +48,52 @@ struct bh1749_data
     struct mutex lock;
 };
 
-static int bh1749_read_word(struct bh1749_data *data, u8 reg)
-{
-    int ret;
-
-    mutex_lock(&data->lock);
-    ret = i2c_smbus_read_word_data(data->client, reg);
-    mutex_unlock(&data->lock);
-
-    return ret;
+#define BH1749_CHANNEL(_colour, _addr)              \
+{                                                   \
+    .type = IIO_INTENSITY,                          \
+    .modified = 1,                                  \
+    .channel2 = IIO_MOD_LIGHT_##_colour,            \
+    .address = _addr,                               \
+    .info_mask_separate = BIT(IIO_CHAN_INFO_RAW),   \
 }
 
-static ssize_t bh1749_show_channel(struct device *dev, u8 reg, char *buf)
+static const struct iio_chan_spec bh1749_channels[] = 
 {
-    struct bh1749_data *data = i2c_get_clientdata(to_i2c_client(dev));
-    int ret;
-
-    ret = bh1749_read_word(data, reg);
-    if (ret < 0)
-    {
-        return ret;
-    }
-    return sysfs_emit(buf, "%u\n", (u16)ret);
-}
-
-#define BH1749_CHANNEL_ATTR(name, reg)      \
-static ssize_t name##_show(struct device *dev, struct device_attribute *attr, char *buf) \
-{   \
-    return bh1749_show_channel(dev, reg, buf);  \
-}   \
-static DEVICE_ATTR_RO(name)
-
-BH1749_CHANNEL_ATTR(red,    BH1749_RED_DATA);
-BH1749_CHANNEL_ATTR(green,  BH1749_GREEN_DATA);
-BH1749_CHANNEL_ATTR(blue,   BH1749_BLUE_DATA);
-BH1749_CHANNEL_ATTR(ir,     BH1749_IR_DATA);
-BH1749_CHANNEL_ATTR(green2, BH1749_GREEN2_DATA);
-
-static ssize_t valid_show(struct device *dev, struct device_attribute *attr, char *buf)
-{
-    struct bh1749_data *data = i2c_get_clientdata(to_i2c_client(dev));
-    int ret;
-
-    ret = i2c_smbus_read_byte_data(data->client, BH1749_MODE_CTRL2);
-    if (ret < 0)
-        return ret;
-
-    return sysfs_emit(buf, "%d\n", !!(ret & BH1749_CTRL2_VALID));
-}
-static DEVICE_ATTR_RO(valid);
-
-static struct attribute *bh1749_attrs[] = 
-{
-    &dev_attr_red.attr,
-    &dev_attr_green.attr,
-    &dev_attr_blue.attr,
-    &dev_attr_ir.attr,
-    &dev_attr_green2.attr,
-    &dev_attr_valid.attr,
-    NULL
+    BH1749_CHANNEL(RED,     BH1749_RED_DATA),
+    BH1749_CHANNEL(GREEN,   BH1749_GREEN_DATA),
+    BH1749_CHANNEL(BLUE,    BH1749_BLUE_DATA),
+    BH1749_CHANNEL(IR,      BH1749_IR_DATA),
 };
-ATTRIBUTE_GROUPS(bh1749);
+
+static int bh1749_read_raw(struct iio_dev *indio_dev,
+            struct iio_chan_spec const *chan,
+            int *val, int *val2, long mask)
+{
+    struct bh1749_data *data = iio_priv(indio_dev);
+    int ret;
+
+    switch (mask)
+    {
+        case IIO_CHAN_INFO_RAW:
+            mutex_lock(&data->lock);
+            ret = i2c_smbus_read_word_data(data->client, chan->address);
+            mutex_unlock(&data->lock);
+
+            if (ret < 0)
+                return ret;
+
+            *val = (u16)ret;
+            return IIO_VAL_INT;
+
+        default:
+            return -EINVAL;
+    }
+}
+
+static const struct iio_info bh1749_info = 
+{
+    .read_raw = bh1749_read_raw,
+};
 
 static int bh1749_init_chip(struct bh1749_data *data)
 {
@@ -133,10 +119,18 @@ static int bh1749_init_chip(struct bh1749_data *data)
     return 0;
 }
 
+static void bh1749_power_off(void *data_ptr)
+{
+    struct bh1749_data *data = data_ptr;
+
+    i2c_smbus_write_byte_data(data->client, BH1749_MODE_CTRL2, 0x00);
+}
+
 static int bh1749_probe(struct i2c_client *client)
 {
     struct device *dev = &client->dev;
     struct bh1749_data *data;
+    struct iio_dev *indio_dev;
     int ret;
 
     dev_info(dev, "probe called (addr=0x%02x)\n", client->addr);
@@ -147,13 +141,14 @@ static int bh1749_probe(struct i2c_client *client)
         return -EOPNOTSUPP;
     }
 
-    data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
-    if (!data)
+    indio_dev = devm_iio_device_alloc(dev, sizeof(*data));
+    if (!indio_dev)
         return -ENOMEM;
 
+    data = iio_priv(indio_dev);
     data->client = client;
     mutex_init(&data->lock);
-    i2c_set_clientdata(client, data);
+    i2c_set_clientdata(client, indio_dev);
 
     ret = i2c_smbus_read_byte_data(client, BH1749_MANUFACTURER_ID);
     if (ret < 0)
@@ -188,19 +183,26 @@ static int bh1749_probe(struct i2c_client *client)
         return ret;
     }
 
-    dev_info(dev, "BH1749NUC ready (part id 0x%02x)\n", BH1749_PART_ID);
+    ret = devm_add_action_or_reset(dev, bh1749_power_off, data);
+    if (ret)
+        return ret;
 
-    ret = bh1749_read_word(data, BH1749_RED_DATA);
-    if (ret >= 0)
-        dev_info(dev, "initial red = %u\n", (u16)ret);
+    indio_dev->info = &bh1749_info;
+    indio_dev->name = "bh1749";
+    indio_dev->channels = bh1749_channels;
+    indio_dev->num_channels = ARRAY_SIZE(bh1749_channels);
+    indio_dev->modes = INDIO_DIRECT_MODE;
+
+    ret = devm_iio_device_register(dev, indio_dev);
+    if (ret)
+    {
+        dev_err(dev, "failed to register iio device (%d)\n", ret);
+        return ret;
+    }
+
+    dev_info(dev, "BH1749NUC registered (part id 0x%02x)\n", BH1749_PART_ID);
 
     return 0;
-}
-
-static void bh1749_remove(struct i2c_client *client)
-{
-    i2c_smbus_write_byte_data(client, BH1749_MODE_CTRL2, 0x00);
-    dev_info(&client->dev, "remove called\n");
 }
 
 static const struct i2c_device_id bh1749_id[] = 
@@ -223,10 +225,8 @@ static struct i2c_driver bh1749_driver =
     {
         .name = "bh1749",
         .of_match_table = bh1749_of_match,
-        .dev_groups = bh1749_groups,
     },
     .probe = bh1749_probe,
-    .remove = bh1749_remove,
     .id_table = bh1749_id,
 };
 
