@@ -143,7 +143,8 @@ $ cat /proc/interrupts | grep chan_button
 
 커널이 관리하는 인터럽트 목록에 직접 지정한 이름이 등록됩니다. 앞의 숫자 넷은 CPU별 발생 횟수로, 스위치를 누를 때마다 증가합니다.
 
-**<사진>** — `dmesg` 의 `button irq 59 registered` 와 `/proc/interrupts` 출력
+**<<img width="866" height="168" alt="image" src="https://github.com/user-attachments/assets/cb82ddfd-4ef1-4bd2-a267-4a2877dc6db5" />
+>** — `dmesg` 의 `button irq 59 registered` 와 `/proc/interrupts` 출력
 
 ## 채터링
 
@@ -158,7 +159,8 @@ button irq #3 (led=1)
 
 기계식 접점이 붙는 순간 수 ms 동안 미세하게 튀면서 엣지가 여러 번 발생합니다. LED도 여러 번 토글되어 최종 상태를 예측할 수 없습니다.
 
-**<사진>** — 한 번 눌렀는데 로그가 여러 줄 출력된 화면
+**<<img width="866" height="168" alt="image" src="https://github.com/user-attachments/assets/0e4494ff-27ca-49f1-821d-c65b1b6ed11e" />
+>** — 한 번 눌렀는데 로그가 여러 줄 출력된 화면
 
 ## 소프트웨어 디바운스
 
