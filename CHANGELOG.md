@@ -2,12 +2,14 @@
 
 ## [Unreleased]
 ### In Progress
-- `irq_count` sysfs 노출, top half / bottom half 분리
+- top half / bottom half 분리
+- `chan_drv` 를 `.dev_groups` 속성 그룹으로 전환
 - BH1749NUC — `scale` 속성
 - `ioctl` 인터페이스 — 값 전달이 아닌 명령 전달
 
 ## 2026-09-01
 ### Added
+- `irq_count` / `bounce_count` sysfs 속성 — `dmesg` 없이 인터럽트 통계 확인
 - GPIO 인터럽트 처리 (`drivers/chan_drv/`)
   - 오버레이에 pinctrl fragment 및 `button-gpios` 추가
   - `gpiod_to_irq()` + `devm_request_threaded_irq()` 로 ISR 등록
@@ -17,6 +19,10 @@
 
 센서 INT 핀이 보드에 인출되어 있지 않아 GPIO 스위치로 대체했다.
 스위치의 풀 방식은 `gpioget` 으로 실측해 결정했다.
+
+### Fixed
+- `irq_count` 생성 실패 시 아직 만들지 않은 파일을 제거하는 경로로
+  점프하던 문제 — `goto err_bounce` → `goto err_sysfs`
 
 ## 2026-08-28 (2)
 ### Added

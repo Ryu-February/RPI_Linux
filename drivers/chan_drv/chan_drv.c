@@ -52,7 +52,31 @@ static ssize_t value_store(struct device *dev, struct device_attribute *attr, co
 
 static DEVICE_ATTR_RW(value);
 
-/*신규*/
+static ssize_t irq_count_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	unsigned long flags;
+	unsigned int count;
+
+	spin_lock_irqsave(&irq_lock, flags);
+	count = irq_count;
+	spin_unlock_irqrestore(&irq_lock, flags);
+
+	return sysfs_emit(buf, "%u\n", count);
+}
+static DEVICE_ATTR_RO(irq_count);
+
+static ssize_t bounce_count_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	unsigned long flags;
+	unsigned int bounces;
+
+	spin_lock_irqsave(&irq_lock, flags);
+	bounces = bounce_count;
+	spin_unlock_irqrestore(&irq_lock, flags);
+
+	return sysfs_emit(buf, "%u\n", bounces);
+}
+static DEVICE_ATTR_RO(bounce_count);
 
 static int chan_open(struct inode *inode, struct file *filp)
 {
@@ -222,12 +246,26 @@ static int my_probe(struct platform_device *pdev)
 		dev_err(dev, "sysfs make failure (%d)\n", ret);
 		return ret;
 	}
+
+	ret = device_create_file(dev, &dev_attr_irq_count);
+	if (ret)
+	{
+		dev_err(dev, "irq_count sysfs failure (%d)\n", ret);
+		goto err_sysfs;
+	}
+	
+	ret = device_create_file(dev, &dev_attr_bounce_count);
+	if (ret)
+	{
+		dev_err(dev, "bounce_count sysfs failure (%d)\n", ret);
+		goto err_irqcount;
+	}
 	
 	ret = alloc_chrdev_region(&chan_devt, 0, 1, "my_device");
 	if (ret) 
 	{
 		dev_err(dev, "alloc_chrdev_region failed (%d)\n", ret);
-		goto err_sysfs;
+		goto err_bounce;
 	}
 	
 	cdev_init(&chan_cdev, &chan_fops);
@@ -277,6 +315,10 @@ static int my_probe(struct platform_device *pdev)
 		cdev_del(&chan_cdev);
 	err_region:
 		unregister_chrdev_region(chan_devt, 1);
+	err_bounce:
+		device_remove_file(dev, &dev_attr_bounce_count);
+	err_irqcount:
+		device_remove_file(dev, &dev_attr_irq_count);
 	err_sysfs:
 		device_remove_file(dev, &dev_attr_value);
 	return ret;
@@ -289,6 +331,8 @@ static void my_remove(struct platform_device *pdev)
 	cdev_del(&chan_cdev);
 	unregister_chrdev_region(chan_devt, 1);
 	
+	device_remove_file(&pdev->dev, &dev_attr_bounce_count);
+	device_remove_file(&pdev->dev, &dev_attr_irq_count);
 	device_remove_file(&pdev->dev, &dev_attr_value);
 	dev_info(&pdev->dev, "remove called\n");
 }

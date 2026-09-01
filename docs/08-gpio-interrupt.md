@@ -245,10 +245,95 @@ button irq #4 (led=1, bounced=3)
 
 **<사진>** — 디바운스 적용 후 한 번 누르면 한 줄만 출력되는 화면
 
+## 카운터를 sysfs로 노출
+
+`dmesg` 를 봐야만 알 수 있던 카운터를 파일로 뺐습니다.
+
+```c
+static ssize_t irq_count_show(struct device *dev,
+			      struct device_attribute *attr, char *buf)
+{
+	unsigned long flags;
+	unsigned int count;
+
+	spin_lock_irqsave(&irq_lock, flags);
+	count = irq_count;
+	spin_unlock_irqrestore(&irq_lock, flags);
+
+	return sysfs_emit(buf, "%u\n", count);
+}
+static DEVICE_ATTR_RO(irq_count);
+```
+
+`bounce_count` 도 같은 형태로 하나 더 만들었습니다. **값 하나에 파일 하나**가 sysfs 관례이므로, 두 값을 한 파일에 넣어 파싱하게 만들지 않았습니다.
+
+### 여기서 락이 실제로 필요해진다
+
+이전까지는 락을 걸어 두었지만 경쟁 상대가 없었습니다. 카운터를 만지는 주체가 ISR 하나뿐이었기 때문입니다.
+
+```
+스위치 입력 → ISR (커널 스레드)     ─┐
+                                     ├─ irq_count 동시 접근
+cat irq_count → show (프로세스)     ─┘
+```
+
+`unsigned int` 읽기가 대개 원자적으로 처리되기는 하지만, **그것은 아키텍처와 컴파일러에 의존하는 가정**이므로 커널 코드에서는 그렇게 작성하지 않습니다. 두 카운터를 함께 읽어야 하는 경우라면 문제가 더 분명해집니다 — 중간에 ISR이 끼어들면 서로 맞지 않는 조합이 나옵니다.
+
+### 에러 처리 계단
+
+sysfs 파일이 늘면서 되감기 단계도 늘었습니다.
+
+```c
+err_bounce:
+	device_remove_file(dev, &dev_attr_bounce_count);
+err_irqcount:
+	device_remove_file(dev, &dev_attr_irq_count);
+err_sysfs:
+	device_remove_file(dev, &dev_attr_value);
+	return ret;
+```
+
+**계단을 추가할 때는 기존 `goto` 목적지도 함께 내려야 합니다.** 이 과정에서 `irq_count` 생성 실패 시 `err_bounce` 로 점프하도록 잘못 작성한 버그가 있었습니다. 아직 만들지 않은 파일을 제거하려 드는 경로입니다.
+
+실패 지점은 **자기 단계를 건너뛰고 그 앞부터** 되감아야 한다는 규칙을 다시 확인했습니다. 같은 실수를 이 드라이버에서 세 번째 반복한 것이라, 계단이 깊어지면 속성 그룹(`.dev_groups`)으로 전환하는 편이 안전합니다. BH1749 드라이버에서 사용한 방식입니다.
+
+### 검증
+
+```bash
+$ ls /sys/devices/platform/my_device/
+bounce_count  driver  irq_count  leds  of_node  power  subsystem  uevent  value
+supplier:platform:fe200000.gpio
+
+$ grep . /sys/devices/platform/my_device/{irq_count,bounce_count}
+/sys/devices/platform/my_device/irq_count:11
+/sys/devices/platform/my_device/bounce_count:20
+```
+
+`dmesg` 없이 스위치 동작을 확인할 수 있습니다. 한 번 누를 때 평균 2개 정도가 걸러지고 있습니다.
+
+### 커널 카운터와 대조
+
+```bash
+cat /proc/interrupts | grep chan_button
+```
+
+`/proc/interrupts` 는 인터럽트 라인이 만들어진 뒤의 **누적값**이라 모듈을 다시 적재해도 초기화되지 않습니다. 따라서 절대값이 아니라 **증분**을 비교해야 합니다.
+
+모듈 적재 직후 값을 기록하고 스위치를 N번 누른 뒤, `irq_count + bounce_count` 와 `/proc/interrupts` 증분이 일치하는지 확인합니다. 다만 `IRQF_ONESHOT` 으로 스레드 실행 중 인터럽트가 마스크되므로 완전히 같지 않을 수 있습니다.
+
+### sysfs에 함께 생긴 것들
+
+```
+leds                              LED 서브시스템이 만든 링크
+supplier:platform:fe200000.gpio   GPIO 컨트롤러 의존성
+```
+
+두 번째는 오버레이에서 `pinctrl-0` 을 지정한 결과로 커널이 기록한 것입니다. 이 의존성 정보로 probe 순서와 서스펜드/리줌 순서가 결정됩니다.
+
 ## 다음
 
-- [ ] `irq_count` 를 sysfs로 노출 — spinlock이 실제로 필요한 상황 구현
 - [ ] top half / bottom half 분리 — 인터럽트 컨텍스트 제약 직접 확인
+- [ ] 에러 처리를 `.dev_groups` 속성 그룹으로 전환해 계단 제거
 
 ---
 
