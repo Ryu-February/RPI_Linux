@@ -7,9 +7,20 @@
 #include <linux/device.h>
 #include <linux/uaccess.h>
 #include <linux/leds.h>
+#include <linux/interrupt.h>
+#include <linux/spinlock.h>
 
 static u32 my_value;
 static struct gpio_desc *my_gpio;
+
+static struct gpio_desc *my_button;
+static int my_irq;
+static unsigned int irq_count;
+static unsigned int bounce_count;
+static unsigned long last_jiffies;
+
+#define CHAN_BOUNCE_MS		200
+static DEFINE_SPINLOCK(irq_lock);
 
 static dev_t chan_devt;
 static struct cdev chan_cdev;
@@ -41,7 +52,7 @@ static ssize_t value_store(struct device *dev, struct device_attribute *attr, co
 
 static DEVICE_ATTR_RW(value);
 
-/* ---------- 캐릭터 디바이스 ---------- */
+/*신규*/
 
 static int chan_open(struct inode *inode, struct file *filp)
 {
@@ -60,7 +71,7 @@ static ssize_t chan_read(struct file *filp, char __user *buf,
 {
 	char tmp[16];
 	int n;
-
+	
 	n = scnprintf(tmp, sizeof(tmp), "%u\n", my_value);
 	return simple_read_from_buffer(buf, len, off, tmp, n);
 }
@@ -71,19 +82,19 @@ static ssize_t chan_write(struct file *filp, const char __user *buf,
 	char tmp[16];
 	u32 val;
 	int ret;
-
+	
 	if (len == 0 || len >= sizeof(tmp))
 		return -EINVAL;
-
+	
 	if (copy_from_user(tmp, buf, len))
 		return -EFAULT;
-
+	
 	tmp[len] = '\0';
-
+	
 	ret = kstrtou32(strim(tmp), 0, &val);
 	if (ret)
 		return ret;
-
+	
 	my_value = val;
 	if (my_gpio)
 	{
@@ -112,6 +123,43 @@ static void chan_led_set(struct led_classdev *cdev, enum led_brightness b)
 static enum led_brightness chan_led_get(struct led_classdev *cdev)
 {
 	return my_value ? LED_ON : LED_OFF;
+}
+
+static irqreturn_t chan_button_isr(int irq, void *dev_id)
+{
+	struct device *dev = dev_id;
+	unsigned long flags;
+	unsigned int count, bounces;
+	bool ignore = false;
+
+	spin_lock_irqsave(&irq_lock, flags);
+
+	if (last_jiffies && time_before(jiffies, last_jiffies + msecs_to_jiffies(CHAN_BOUNCE_MS)))
+	{
+		bounce_count++;
+		ignore = true;
+	}
+	else
+	{
+		last_jiffies = jiffies;
+		irq_count++;
+	}
+
+	count = irq_count;
+	bounces = bounce_count;
+	spin_unlock_irqrestore(&irq_lock, flags);
+
+	if (ignore)
+		return IRQ_HANDLED;
+
+	my_value = !my_value;
+	if (my_gpio)
+	{
+		gpiod_set_value(my_gpio, my_value ? 1 : 0);
+	}
+	dev_info(dev, "button irq #%u (led=%u, bounced=%u)\n", count, my_value, bounces);
+
+	return IRQ_HANDLED;
 }
 
 static int my_probe(struct platform_device *pdev)
@@ -145,20 +193,43 @@ static int my_probe(struct platform_device *pdev)
 	}
 	dev_info(dev, "GPIO acquire success\n");
 
-	ret = device_create_file(dev, &dev_attr_value);
+	my_button = devm_gpiod_get(dev, "button", GPIOD_IN);
+	if (IS_ERR(my_button))
+	{
+		dev_err(dev, "button GPIO acquire failure (%ld)\n", PTR_ERR(my_button));
+		return PTR_ERR(my_button);
+	}
+
+	my_irq = gpiod_to_irq(my_button);
+	if (my_irq < 0)
+	{
+		dev_err(dev, "failed to map gpio to irq (%d)\n", my_irq);
+		return my_irq;
+	}
+	
+	ret = devm_request_threaded_irq(dev, my_irq, NULL, chan_button_isr, IRQF_TRIGGER_RISING | IRQF_ONESHOT, "chan_button", dev);
 	if (ret)
+	{
+		dev_err(dev, "failed to request irq (%d)\n", ret);
+		return ret;
+	}
+	
+	dev_info(dev, "button irq %d registered\n", my_irq);
+	
+	ret = device_create_file(dev, &dev_attr_value);
+	if (ret) 
 	{
 		dev_err(dev, "sysfs make failure (%d)\n", ret);
 		return ret;
 	}
-
+	
 	ret = alloc_chrdev_region(&chan_devt, 0, 1, "my_device");
-	if (ret)
+	if (ret) 
 	{
 		dev_err(dev, "alloc_chrdev_region failed (%d)\n", ret);
 		goto err_sysfs;
 	}
-
+	
 	cdev_init(&chan_cdev, &chan_fops);
 	chan_cdev.owner = THIS_MODULE;
 	ret = cdev_add(&chan_cdev, chan_devt, 1);
@@ -166,14 +237,14 @@ static int my_probe(struct platform_device *pdev)
 		dev_err(dev, "cdev_add failed (%d)\n", ret);
 		goto err_region;
 	}
-
+	
 	chan_class = class_create("chan_class");
 	if (IS_ERR(chan_class))
 	{
-		ret = PTR_ERR(chan_class);
+		ret = -ENODEV;
 		goto err_cdev;
 	}
-
+	
 	if (IS_ERR(device_create(chan_class, NULL, chan_devt, NULL, "my_device")))
 	{
 		ret = -ENODEV;
@@ -192,12 +263,12 @@ static int my_probe(struct platform_device *pdev)
 		goto err_device;
 	}
 	dev_info(dev, "led ready: /sys/class/leds/%s/brightness\n", chan_led.name);
-
+	
 	dev_info(dev, "chardev ready: /dev/my_device (major=%d minor=%d)\n",
-		MAJOR(chan_devt), MINOR(chan_devt));
+		MAJOR(chan_devt), MINOR(chan_devt));	
 	dev_info(dev, "sysfs ready: /sys/devices/platform/my_device/value\n");
 	return 0;
-
+	
 	err_device:
 		device_destroy(chan_class, chan_devt);
 	err_class:
@@ -217,7 +288,7 @@ static void my_remove(struct platform_device *pdev)
 	class_destroy(chan_class);
 	cdev_del(&chan_cdev);
 	unregister_chrdev_region(chan_devt, 1);
-
+	
 	device_remove_file(&pdev->dev, &dev_attr_value);
 	dev_info(&pdev->dev, "remove called\n");
 }

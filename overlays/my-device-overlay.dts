@@ -4,7 +4,21 @@
 /{
 	compatible = "brcm,bcm2711";
 
-	fragment@0 {
+	fragment@0
+	{
+		target = <&gpio>;
+		__overlay__
+		{
+			my_button_pins: my_button_pins
+			{
+				brcm,pins = <27>;
+				brcm,function = <0>; /*input*/
+				brcm,pull = <0>;	/* none - 스위치 모듈에 자체 풀다운이 있음 */
+			};
+		};
+	};
+
+	fragment@1 {
 		target-path = "/";
 		__overlay__
 		{
@@ -14,6 +28,9 @@
 				my-number = <42>;
 				my-string = "hello";
 				gpios = <&gpio 17 0>;
+				button-gpios = <&gpio 27 0>;
+				pinctrl-names = "default";
+				pinctrl-0 = <&my_button_pins>;
 			};
 		};
 	};
