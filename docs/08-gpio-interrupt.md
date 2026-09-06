@@ -405,6 +405,7 @@ echo 0 | sudo tee /sys/devices/platform/my_device/value   # 5초 멈춤
 $ cat /sys/devices/platform/my_device/value
 1
 ```
+![Uploading image.png…]()
 
 값은 1인데 LED는 꺼져 있습니다. `store` 가 5초 전 스냅샷으로 GPIO를 덮어썼기 때문입니다.
 
@@ -417,7 +418,8 @@ $ sudo cat /sys/kernel/debug/gpio | grep GPIO17
  gpio-529 (GPIO17   |my_device   ) out lo
 ```
 
-**<사진 1>** — 변수는 1, 핀은 `out lo`
+**<<img width="1745" height="173" alt="image" src="https://github.com/user-attachments/assets/55ef400d-1303-491f-a25d-9687311cfd14" />
+>** — 변수는 1, 핀은 `out lo`
 
 ### 락을 걸 곳
 
