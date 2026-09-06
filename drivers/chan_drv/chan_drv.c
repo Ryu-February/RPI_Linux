@@ -20,7 +20,8 @@ static unsigned int bounce_count;
 static unsigned long last_jiffies;
 
 #define CHAN_BOUNCE_MS		200
-static DEFINE_SPINLOCK(irq_lock);
+static DEFINE_SPINLOCK(irq_lock);//정상적인 상태
+// static spinlock_t irq_lock;		//비정상 상태
 
 static dev_t chan_devt;
 static struct cdev chan_cdev;
@@ -34,6 +35,7 @@ static ssize_t value_show(struct device *dev, struct device_attribute *attr, cha
 
 static ssize_t value_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
+	unsigned long flags;
 	u32 tmp;
 	int ret;
 
@@ -41,12 +43,14 @@ static ssize_t value_store(struct device *dev, struct device_attribute *attr, co
 	if (ret)
 		return ret;
 
+	spin_lock_irqsave(&irq_lock, flags);
 	my_value = tmp;
 	if (my_gpio)
 	{
 		gpiod_set_value(my_gpio, my_value ? 1 : 0);
 	}
-	dev_info(dev, "value set to %u\n", my_value);
+	spin_unlock_irqrestore(&irq_lock, flags);
+	dev_info(dev, "value set to %u\n", tmp);
 	return count;
 }
 
@@ -103,6 +107,7 @@ static ssize_t chan_read(struct file *filp, char __user *buf,
 static ssize_t chan_write(struct file *filp, const char __user *buf,
 		size_t len, loff_t *off)
 {
+	unsigned long flags;
 	char tmp[16];
 	u32 val;
 	int ret;
@@ -119,11 +124,14 @@ static ssize_t chan_write(struct file *filp, const char __user *buf,
 	if (ret)
 		return ret;
 	
+	spin_lock_irqsave(&irq_lock, flags);
 	my_value = val;
 	if (my_gpio)
 	{
 		gpiod_set_value(my_gpio, val ? 1 : 0);
 	}
+	spin_unlock_irqrestore(&irq_lock, flags);
+
 	pr_info("chan_drv: write %u\n", val);
 	return len;
 }
@@ -138,10 +146,14 @@ static const struct file_operations chan_fops = {
 
 static void chan_led_set(struct led_classdev *cdev, enum led_brightness b)
 {
+	unsigned long flags;
+
+	spin_lock_irqsave(&irq_lock, flags);
 	if (my_gpio)
 		gpiod_set_value(my_gpio, b ? 1 : 0);
 
 	my_value = b;
+	spin_unlock_irqrestore(&irq_lock, flags);
 }
 
 static enum led_brightness chan_led_get(struct led_classdev *cdev)
@@ -171,16 +183,16 @@ static irqreturn_t chan_button_isr(int irq, void *dev_id)
 
 	count = irq_count;
 	bounces = bounce_count;
-	spin_unlock_irqrestore(&irq_lock, flags);
-
-	if (ignore)
-		return IRQ_HANDLED;
-
 	my_value = !my_value;
 	if (my_gpio)
 	{
 		gpiod_set_value(my_gpio, my_value ? 1 : 0);
 	}
+	spin_unlock_irqrestore(&irq_lock, flags);
+
+	if (ignore)
+		return IRQ_HANDLED;
+
 	dev_info(dev, "button irq #%u (led=%u, bounced=%u)\n", count, my_value, bounces);
 
 	return IRQ_HANDLED;
