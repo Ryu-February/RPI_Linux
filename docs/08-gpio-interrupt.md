@@ -330,8 +330,150 @@ supplier:platform:fe200000.gpio   GPIO 컨트롤러 의존성
 
 두 번째는 오버레이에서 `pinctrl-0` 을 지정한 결과로 커널이 기록한 것입니다. 이 의존성 정보로 probe 순서와 서스펜드/리줌 순서가 결정됩니다.
 
+## 락 범위를 어디까지 잡을 것인가
+
+카운터를 sysfs로 노출하고 나서 코드를 다시 훑다가, `my_value` 갱신과 GPIO 출력이 락 없이 연달아 수행되고 있는 것을 발견했습니다.
+
+```c
+my_value = tmp;                              /* 변수 */
+gpiod_set_value(my_gpio, my_value ? 1 : 0);  /* 하드웨어 */
+```
+
+각각은 원자적이지만 **둘을 묶은 것은 아닙니다.** 사이에 다른 컨텍스트가 끼어들면 변수 값과 실제 LED 상태가 어긋난 채로 남습니다.
+
+### 컴파일러가 창을 만든다
+
+소스에는 두 번째 줄에서 `my_value` 를 읽는다고 썼지만, 역어셈블해보니 메모리를 다시 읽지 않습니다.
+
+```
+99c:  str  w2, [x19]         ; my_value = tmp
+9a0:  ldr  x0, [x0, #120]    ; my_gpio 로드
+9a4:  cbz  x0, 9b8           ; if (my_gpio)
+9a8:  cmp  w2, #0x0          ; 메모리 재로드 없음. w2 재사용
+9b0:  bl   gpiod_set_value
+9b4:  ldr  w2, [x19]         ; 외부 함수 호출 뒤라 여기선 재로드
+```
+
+즉 실제로 실행되는 코드는 `gpiod_set_value(my_gpio, tmp ? 1 : 0)` 입니다. 그 사이 ISR이 `my_value` 를 바꿔도 하드웨어에는 반영되지 않습니다.
+
+9b4에서는 다시 읽습니다. 외부 함수 호출이 전역을 바꿨을 수 있으므로 컴파일러가 재로드한 것입니다.
+
+### 재현
+
+컴파일러가 하는 일(레지스터 캐싱)을 소스에 그대로 옮겨 적고, 그 사이에 지연을 넣었습니다. 없는 버그를 만든 것이 아니라 나노초 창을 5초로 벌린 것입니다.
+
+```c
+my_value = tmp;
+snapshot = my_value;
+if (my_gpio) {
+	msleep(5000);
+	gpiod_set_value(my_gpio, snapshot ? 1 : 0);
+}
+```
+
+`store` 는 프로세스 컨텍스트이므로 `msleep()` 을 부를 수 있습니다. ISR(`handler` 슬롯)이었다면 커널이 죽습니다.
+
+### 지연을 넣으면 버그가 사라진다
+
+처음에는 `snapshot` 없이 이렇게 썼습니다.
+
+```c
+my_value = tmp;
+if (my_gpio) {
+	msleep(5000);
+	gpiod_set_value(my_gpio, my_value ? 1 : 0);   /* snapshot 이 아니라 my_value */
+}
+```
+
+이 버전은 **재현되지 않습니다.** 창 안에서 스위치를 눌러도 값과 LED가 일치합니다.
+
+`msleep()` 이 외부 함수 호출이라 컴파일러가 그 뒤에서 `my_value` 를 **메모리에서 다시 읽기** 때문입니다. ISR이 바꿔놓은 값을 그대로 읽어 반영하므로 결과가 맞아떨어집니다.
+
+즉 **관찰하려고 넣은 지연이 버그를 고쳐버립니다.** 원본 코드에는 `msleep` 이 없어 재로드가 일어나지 않고, 역어셈블의 `cmp w2, #0x0` 이 그 증거입니다.
+
+`snapshot` 은 이 문제를 우회하려고 둔 장치입니다. 컴파일러가 레지스터에 담아두던 것을 소스에 명시적으로 옮겨 적은 것이고, 그래야 원본과 같은 조건이 됩니다.
+
+> 관찰 수단이 관찰 대상을 바꾸는 경우입니다. 최적화가 개입하는 동시성 버그를 다룰 때 흔히 겪는 함정이고, `printk` 를 넣었더니 증상이 사라지는 상황도 같은 계열입니다.
+
+```bash
+echo 1 | sudo tee /sys/devices/platform/my_device/value   # LED 켜짐
+echo 0 | sudo tee /sys/devices/platform/my_device/value   # 5초 멈춤
+# 그 사이에 스위치를 누른다
+```
+
+```bash
+$ cat /sys/devices/platform/my_device/value
+1
+```
+
+값은 1인데 LED는 꺼져 있습니다. `store` 가 5초 전 스냅샷으로 GPIO를 덮어썼기 때문입니다.
+
+핀 상태로도 교차 확인했습니다.
+
+```bash
+$ cat /sys/devices/platform/my_device/value
+1
+$ sudo cat /sys/kernel/debug/gpio | grep GPIO17
+ gpio-529 (GPIO17   |my_device   ) out lo
+```
+
+**<사진 1>** — 변수는 1, 핀은 `out lo`
+
+### 락을 걸 곳
+
+`my_value` 를 만지는 여덟 곳을 컨텍스트별로 분류했습니다.
+
+| 함수 | 컨텍스트 | 하는 일 | 락 |
+|---|---|---|---|
+| `value_show` | 프로세스 | 읽기 1개 | `READ_ONCE` |
+| `value_store` | 프로세스 | 변수 + GPIO | 필요 |
+| `chan_read` | 프로세스 | 읽기 1개 | `READ_ONCE` |
+| `chan_write` | 프로세스 | 변수 + GPIO | 필요 |
+| `chan_led_set` | 아토믹 가능 | 변수 + GPIO | 필요 |
+| `chan_led_get` | 프로세스 | 읽기 1개 | `READ_ONCE` |
+| `chan_button_isr` | 커널 스레드 | 변수 + GPIO | 필요 |
+| `my_probe` | 프로세스 | 쓰기 1개 | 불필요 |
+
+판단 기준은 **값 하나를 읽고 쓰느냐, 여러 개를 일관되게 유지해야 하느냐** 입니다. aarch64에서 정렬된 32비트 읽기는 하드웨어가 원자적으로 처리하므로 읽기에는 락이 필요 없고, 컴파일러 캐싱만 `READ_ONCE` 로 막으면 됩니다.
+
+`my_probe` 가 예외인 이유는 그 시점에 sysfs·chardev·LED가 아직 등록되지 않아 경쟁 상대가 존재하지 않기 때문입니다. 준비를 마치고 마지막에 등록하는 순서 덕분입니다.
+
+### mutex 가 아닌 이유
+
+`chan_led_set` 은 `led_classdev.brightness_set` 슬롯에 등록돼 있고, LED 코어는 이 슬롯을 잘 수 없는 것으로 취급합니다. `heartbeat` 같은 트리거가 타이머(소프트IRQ)에서 호출하기 때문입니다.
+
+```bash
+echo heartbeat | sudo tee /sys/class/leds/chan:led/trigger
+```
+
+따라서 mutex 는 후보에서 탈락하고 `spin_lock_irqsave` 를 씁니다.
+
+`gpiod_set_value()` 를 스핀락 안에 넣어도 되는지도 확인이 필요했습니다. `drivers/gpio/gpiolib.c` 주석에 "can be called from contexts where we cannot sleep" 이라고 명시돼 있어 안전합니다. 짝이 되는 `gpiod_set_value_cansleep()` 은 `might_sleep()` 을 부르므로 쓸 수 없습니다. I2C/SPI GPIO 확장칩에 LED를 달았다면 후자를 써야 하고, 그 경우 설계를 바꿔야 했습니다.
+
+### 이 드라이버에서의 심각도
+
+낮습니다. ISR이 변수와 GPIO를 함께 갱신하므로 다음 스위치 입력에서 상태가 다시 맞춰집니다. 실제로 재현 후 두세 번 더 누르니 정상으로 돌아왔습니다.
+
+다만 변수가 다른 로직의 판단 근거가 되는 경우에는 자가 치유되지 않습니다.
+
+```c
+if (my_value)
+	start_transfer();
+```
+
+패턴은 위험하고 이 인스턴스는 경미하다, 가 정확한 평가입니다.
+
+### 트리거로는 관찰되지 않았다
+
+처음에는 `heartbeat` 를 켜고 스위치를 눌러 관찰하려 했으나 실패했습니다. 트리거가 수십 ms마다 GPIO를 갱신하므로 ISR의 토글이 즉시 덮어써집니다. 경쟁 조건이 아니라 소유권 충돌입니다.
+
+여기서 별개의 설계 문제가 드러났습니다. `chan_button_isr` 이 LED 서브시스템을 건너뛰고 GPIO를 직접 쓰고 있어, 트리거가 도는 동안 코어와 ISR이 서로 모른 채 같은 핀을 다툽니다. `led_set_brightness()` 를 쓰도록 바꾸는 것이 맞습니다.
+
 ## 다음
 
+- [ ] 락 4곳 적용 후 재검증
+- [ ] `chan_button_isr` 이 `led_set_brightness()` 를 쓰도록 변경
+- [ ] 읽기 3곳에 `READ_ONCE` 적용
 - [ ] top half / bottom half 분리 — 인터럽트 컨텍스트 제약 직접 확인
 - [ ] 에러 처리를 `.dev_groups` 속성 그룹으로 전환해 계단 제거
 

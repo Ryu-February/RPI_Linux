@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 ### In Progress
+- `my_value` 와 GPIO 출력 사이의 경쟁 조건 수정 (락 4곳)
 - top half / bottom half 분리
 - `chan_drv` 를 `.dev_groups` 속성 그룹으로 전환
 - BH1749NUC — `scale` 속성
