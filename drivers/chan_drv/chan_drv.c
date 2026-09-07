@@ -82,6 +82,15 @@ static ssize_t bounce_count_show(struct device *dev, struct device_attribute *at
 }
 static DEVICE_ATTR_RO(bounce_count);
 
+static struct attribute *chan_attrs[] = 
+{
+	&dev_attr_value.attr,
+	&dev_attr_irq_count.attr,
+	&dev_attr_bounce_count.attr,
+	NULL,
+};
+ATTRIBUTE_GROUPS(chan);
+
 static int chan_open(struct inode *inode, struct file *filp)
 {
 	pr_info("chan_drv: open\n");
@@ -165,7 +174,7 @@ static irqreturn_t chan_button_isr(int irq, void *dev_id)
 {
 	struct device *dev = dev_id;
 	unsigned long flags;
-	unsigned int count, bounces;
+	unsigned int count, bounces, value;
 	bool ignore = false;
 
 	spin_lock_irqsave(&irq_lock, flags);
@@ -179,15 +188,16 @@ static irqreturn_t chan_button_isr(int irq, void *dev_id)
 	{
 		last_jiffies = jiffies;
 		irq_count++;
-	}
+		my_value = !my_value;
 
+		if (my_gpio)
+		{
+		gpiod_set_value(my_gpio, my_value ? 1 : 0);
+		}
+	}
 	count = irq_count;
 	bounces = bounce_count;
-	my_value = !my_value;
-	if (my_gpio)
-	{
-		gpiod_set_value(my_gpio, my_value ? 1 : 0);
-	}
+	value = my_value;
 	spin_unlock_irqrestore(&irq_lock, flags);
 
 	if (ignore)
@@ -201,6 +211,7 @@ static irqreturn_t chan_button_isr(int irq, void *dev_id)
 static int my_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct device *chan_dev;
 	const char *str;
 	u32 val;
 	int ret;
@@ -252,32 +263,11 @@ static int my_probe(struct platform_device *pdev)
 	
 	dev_info(dev, "button irq %d registered\n", my_irq);
 	
-	ret = device_create_file(dev, &dev_attr_value);
-	if (ret) 
-	{
-		dev_err(dev, "sysfs make failure (%d)\n", ret);
-		return ret;
-	}
-
-	ret = device_create_file(dev, &dev_attr_irq_count);
-	if (ret)
-	{
-		dev_err(dev, "irq_count sysfs failure (%d)\n", ret);
-		goto err_sysfs;
-	}
-	
-	ret = device_create_file(dev, &dev_attr_bounce_count);
-	if (ret)
-	{
-		dev_err(dev, "bounce_count sysfs failure (%d)\n", ret);
-		goto err_irqcount;
-	}
-	
 	ret = alloc_chrdev_region(&chan_devt, 0, 1, "my_device");
 	if (ret) 
 	{
 		dev_err(dev, "alloc_chrdev_region failed (%d)\n", ret);
-		goto err_bounce;
+		return ret;
 	}
 	
 	cdev_init(&chan_cdev, &chan_fops);
@@ -285,20 +275,23 @@ static int my_probe(struct platform_device *pdev)
 	ret = cdev_add(&chan_cdev, chan_devt, 1);
 	if (ret) {
 		dev_err(dev, "cdev_add failed (%d)\n", ret);
-		goto err_region;
+		goto out_unregister_region;
 	}
 	
 	chan_class = class_create("chan_class");
 	if (IS_ERR(chan_class))
 	{
-		ret = -ENODEV;
-		goto err_cdev;
+		ret = PTR_ERR(chan_class);
+		dev_err(dev, "class_create failed (%d)\n", ret);
+		goto out_del_cdev;
 	}
 	
-	if (IS_ERR(device_create(chan_class, NULL, chan_devt, NULL, "my_device")))
+	chan_dev = device_create(chan_class, NULL, chan_devt, NULL, "my_device");
+	if (IS_ERR(chan_dev))
 	{
-		ret = -ENODEV;
-		goto err_class;
+		ret = PTR_ERR(chan_dev);
+		dev_err(dev, "device_create failed (%d)\n", ret);
+		goto out_destroy_class;
 	}
 
 	chan_led.name = "chan:led";
@@ -310,7 +303,7 @@ static int my_probe(struct platform_device *pdev)
 	ret = devm_led_classdev_register(dev, &chan_led);
 	if (ret) {
 		dev_err(dev, "led_classdev register failed (%d)\n", ret);
-		goto err_device;
+		goto out_destroy_device;
 	}
 	dev_info(dev, "led ready: /sys/class/leds/%s/brightness\n", chan_led.name);
 	
@@ -319,20 +312,14 @@ static int my_probe(struct platform_device *pdev)
 	dev_info(dev, "sysfs ready: /sys/devices/platform/my_device/value\n");
 	return 0;
 	
-	err_device:
+	out_destroy_device:
 		device_destroy(chan_class, chan_devt);
-	err_class:
+	out_destroy_class:
 		class_destroy(chan_class);
-	err_cdev:
+	out_del_cdev:
 		cdev_del(&chan_cdev);
-	err_region:
+	out_unregister_region:
 		unregister_chrdev_region(chan_devt, 1);
-	err_bounce:
-		device_remove_file(dev, &dev_attr_bounce_count);
-	err_irqcount:
-		device_remove_file(dev, &dev_attr_irq_count);
-	err_sysfs:
-		device_remove_file(dev, &dev_attr_value);
 	return ret;
 }
 
@@ -343,9 +330,6 @@ static void my_remove(struct platform_device *pdev)
 	cdev_del(&chan_cdev);
 	unregister_chrdev_region(chan_devt, 1);
 	
-	device_remove_file(&pdev->dev, &dev_attr_bounce_count);
-	device_remove_file(&pdev->dev, &dev_attr_irq_count);
-	device_remove_file(&pdev->dev, &dev_attr_value);
 	dev_info(&pdev->dev, "remove called\n");
 }
 
@@ -362,6 +346,7 @@ static struct platform_driver my_driver = {
 	.driver = {
 		.name = "my_dev_drv",
 		.of_match_table = my_of_match,
+		.dev_groups = chan_groups,
 	},
 };
 
