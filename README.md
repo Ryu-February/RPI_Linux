@@ -35,6 +35,9 @@
 | [6](docs/06-led-subsystem.md) | LED 서브시스템 | `led_classdev`, `trigger` |
 | [7](docs/07-i2c-bh1749.md) | I2C 컬러센서 (BH1749NUC) | `i2c_driver`, IIO 서브시스템, 데이터시트 기반 구현 |
 | [8](docs/08-gpio-interrupt.md) | GPIO 인터럽트 | `gpiod_to_irq()`, threaded IRQ, spinlock, 디바운스 |
+| [9](docs/09-boot-analysis.md) | 부팅 시퀀스 분석 · 부팅 시간 단축 | `initcall_debug`, `systemd-analyze`, 23.3s → 17.4s |
+
+9단계는 드라이버 구현이 아니라 **시스템 관점의 작업**입니다. 전원 인가부터 로그인까지를 구간별로 측정하고, 원인을 지목해 부팅 시간을 25% 줄였습니다.
 
 7단계는 **메인라인 커널에 드라이버가 없는 칩**을 대상으로 했습니다. 데이터시트를 읽고 레지스터 맵과 초기화 시퀀스를 직접 구현한 뒤, IIO 서브시스템에 등록해 `in_intensity_red_raw` 같은 표준 경로를 제공합니다. 보드에 동일 칩이 두 개 실장되어 있어 인스턴스별 상태 분리도 함께 다뤘습니다.
 
@@ -110,7 +113,7 @@ sudo depmod -a && sudo modprobe chan_drv
 ## 다음 계획
 
 - [ ] BH1749NUC — `scale` 속성 추가 및 게인 변경 지원
-- [ ] `irq_count` sysfs 노출 및 top half / bottom half 분리
-- [ ] 동시 접근 보호 — mutex 도입 및 경쟁 상태 재현
+- [ ] top half / bottom half 분리 — 인터럽트 컨텍스트 제약 확인
 - [ ] `chan_drv` 전역 변수 제거 — 디바이스별 구조체 + `platform_set_drvdata()`
+- [ ] ftrace 로 `probe()` 호출 그래프 추적, oops 덤프 해독
 - [ ] `ioctl` 추가 — 값이 아닌 **명령** 전달

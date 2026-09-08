@@ -1,6 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+- 부팅 시퀀스 분석 및 부팅 시간 단축 (`docs/09-boot-analysis.md`)
+  23.310s → 17.381s. 커널 구간은 2초로 이미 충분했고 유저스페이스가 원인이었다.
+  `initcall_debug` 와 `systemd-analyze` 로 구간을 나눠 측정했다.
+
 ### In Progress
 - `my_value` 와 GPIO 출력 사이의 경쟁 조건 수정 (락 4곳)
 - top half / bottom half 분리
