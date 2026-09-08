@@ -79,7 +79,8 @@ Startup finished in 2.091s (kernel) + 21.218s (userspace) = 23.310s
 
 **커널은 이미 빨랐습니다.** 유저스페이스가 10배입니다. 재보기 전에는 커널을 최적화해야 한다고 생각했는데, 측정하지 않았으면 엉뚱한 데를 팠을 것입니다.
 
-**<사진 1>** — 개선 전 `systemd-analyze` / `blame`
+**<사진 1<img width="585" height="391" alt="image" src="https://github.com/user-attachments/assets/976f5613-6244-4875-88df-6c02e27e87a7" />
+>** — 개선 전 `systemd-analyze` / `blame`
 
 ### critical-chain
 
@@ -152,7 +153,8 @@ sudo systemctl disable winbind.service samba-ad-dc.service
 Startup finished in 2.071s (kernel) + 15.309s (userspace) = 17.381s
 ```
 
-**<사진 2>** — 개선 후 `systemd-analyze` / `critical-chain`
+**<사진 2<img width="493" height="361" alt="image" src="https://github.com/user-attachments/assets/bbae4800-d9a6-4b4a-8374-c12261974118" />
+>** — 개선 후 `systemd-analyze` / `critical-chain`
 
 | | 전 | 후 |
 |---|---|---|
